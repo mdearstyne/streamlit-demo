@@ -209,7 +209,7 @@ if rebuild_index or not index_path.exists():
 
 query = st.text_input("Search keyword or phrase", value="survey response")
 if query:
-    results = find_keyword(query, index_path)
+    results = find_keyword(query, index_path, pdf_dir=pdf_dir_path)
     if not results:
         st.info(f"No matches found for '{query}'.")
     else:

@@ -50,9 +50,10 @@ def test_build_index_and_keyword_search(tmp_path):
     assert records[0]["title"] == (
         "Testing SNAP Client Messaging and Application Forms: Cognitive Interview Results"
     )
+    assert records[0]["file_path"] == "sample.pdf"
     assert records[0]["page"] == 1
 
-    results = find_keyword("response", index_path)
+    results = find_keyword("response", index_path, pdf_dir=tmp_path)
     assert len(results) >= 1
     assert results[0]["document"] == "sample.pdf"
     assert results[0]["title"] == records[0]["title"]
@@ -64,7 +65,7 @@ def test_build_index_and_keyword_search(tmp_path):
         for record in records
     ]
     index_path.write_text(json.dumps(legacy_records), encoding="utf-8")
-    legacy_results = find_keyword("response", index_path)
+    legacy_results = find_keyword("response", index_path, pdf_dir=tmp_path)
     assert legacy_results[0]["title"] == records[0]["title"]
 
 

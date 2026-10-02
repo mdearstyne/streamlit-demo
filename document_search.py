@@ -4,9 +4,7 @@ from pathlib import Path
 
 import fitz
 
-ROOT_DIR = Path(__file__).resolve().parent
-DEFAULT_PDF_DIR = Path(r"C:\Users\zbtay\census-working-papers")
-DEFAULT_INDEX_PATH = ROOT_DIR / "document_index.json"
+from data_config import DEFAULT_INDEX_PATH, DEFAULT_PDF_DIR
 
 
 def normalize_query(query: str) -> str:
@@ -98,7 +96,7 @@ def _build_snippet(text: str, keyword: str, pad: int = 140) -> str:
 
 
 def build_index(pdf_dir: str | Path = DEFAULT_PDF_DIR, output_path: str | Path = DEFAULT_INDEX_PATH):
-    pdf_dir = Path(pdf_dir)
+    pdf_dir = Path(pdf_dir).expanduser().resolve()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -122,7 +120,7 @@ def build_index(pdf_dir: str | Path = DEFAULT_PDF_DIR, output_path: str | Path =
                 {
                     "document": pdf_path.name,
                     "title": title,
-                    "file_path": str(pdf_path),
+                    "file_path": str(pdf_path.relative_to(pdf_dir)),
                     "page": page_number,
                     "text": page_text,
                 }
@@ -134,34 +132,48 @@ def build_index(pdf_dir: str | Path = DEFAULT_PDF_DIR, output_path: str | Path =
     return records
 
 
-def load_index(index_path: str | Path = DEFAULT_INDEX_PATH):
+def load_index(
+    index_path: str | Path = DEFAULT_INDEX_PATH,
+    pdf_dir: str | Path = DEFAULT_PDF_DIR,
+):
     index_path = Path(index_path)
     if not index_path.exists():
-        build_index(DEFAULT_PDF_DIR, index_path)
+        build_index(pdf_dir, index_path)
 
     with index_path.open("r", encoding="utf-8") as fh:
         payload = json.load(fh)
     return payload
 
 
-def find_keyword(query: str, index_path: str | Path = DEFAULT_INDEX_PATH, limit: int = 20):
+def find_keyword(
+    query: str,
+    index_path: str | Path = DEFAULT_INDEX_PATH,
+    limit: int = 20,
+    pdf_dir: str | Path = DEFAULT_PDF_DIR,
+):
     keyword = normalize_query(query)
     if not keyword:
         return []
 
     matches = []
     title_cache = {}
-    for record in load_index(index_path):
+    for record in load_index(index_path, pdf_dir):
         page_text = record["text"]
         lowered_text = page_text.lower()
         if keyword not in lowered_text:
             continue
 
+        record_path = Path(record["file_path"])
+        pdf_path = (
+            record_path
+            if record_path.is_absolute()
+            else Path(pdf_dir) / record_path
+        )
+        pdf_path = pdf_path.resolve()
         title = record.get("title")
         if not title:
-            file_path = record["file_path"]
+            file_path = str(pdf_path)
             if file_path not in title_cache:
-                pdf_path = Path(file_path)
                 if pdf_path.exists():
                     with fitz.open(str(pdf_path)) as pdf_doc:
                         title_cache[file_path] = _extract_title(
@@ -180,7 +192,7 @@ def find_keyword(query: str, index_path: str | Path = DEFAULT_INDEX_PATH, limit:
                 "page": record["page"],
                 "match_count": match_count,
                 "snippet": snippet,
-                "path": record["file_path"],
+                "path": str(pdf_path),
             }
         )
 

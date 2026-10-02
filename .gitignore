@@ -2,3 +2,6 @@ __pycache__/
 .venv/
 *.pyc
 .streamlit/
+.local-data/
+.env
+/document_index.json
