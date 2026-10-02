@@ -18,20 +18,23 @@ from document_search import (
     DEFAULT_INDEX_PATH,
     build_index,
     find_keyword,
-    normalize_query,
+    QuerySyntaxError,
 )
 
 _PDF_SERVERS = {}
 
 
-def _highlight_snippet_html(snippet: str, query: str) -> str:
-    search_term = normalize_query(query)
-    if not search_term:
+def _highlight_snippet_html(snippet: str, search_terms: list[str]) -> str:
+    search_terms = sorted(set(search_terms), key=len, reverse=True)
+    if not search_terms:
         return html.escape(snippet)
 
+    pattern = re.compile(
+        "|".join(re.escape(term) for term in search_terms), re.IGNORECASE
+    )
     highlighted_parts = []
     cursor = 0
-    for match in re.finditer(re.escape(search_term), snippet, re.IGNORECASE):
+    for match in pattern.finditer(snippet):
         highlighted_parts.append(html.escape(snippet[cursor : match.start()]))
         highlighted_parts.append(f"<mark>{html.escape(match.group())}</mark>")
         cursor = match.end()
@@ -180,9 +183,11 @@ def open_pdf_at_page(pdf_path: str, page_number: int, search_term: str = ""):
         return False
 
 
-st.set_page_config(page_title="Document Search", page_icon="📚", layout="wide")
+st.set_page_config(
+    page_title="Pretested Question Resource", page_icon="📚", layout="wide"
+)
 
-st.title("Document repository search")
+st.title("Pretested Question Resource")
 st.caption("Search local PDF working papers for keywords and open the matching file directly from the app.")
 
 with st.sidebar:
@@ -207,12 +212,20 @@ if rebuild_index or not index_path.exists():
         build_index(pdf_dir_path, index_path)
     st.success(f"Indexed documents from {pdf_dir_path}")
 
-query = st.text_input("Search keyword or phrase", value="survey response")
+query = st.text_input("Search keyword or phrase", value='"survey response"')
+st.caption(
+    'Use AND, OR, NOT, parentheses, and double quotes for exact phrases. '
+    'Example: survey AND (response OR "data collection") AND NOT phone'
+)
 if query:
-    results = find_keyword(query, index_path, pdf_dir=pdf_dir_path)
-    if not results:
+    try:
+        results = find_keyword(query, index_path, pdf_dir=pdf_dir_path)
+    except QuerySyntaxError as exc:
+        st.error(f"Invalid search query: {exc}")
+        results = None
+    if results == []:
         st.info(f"No matches found for '{query}'.")
-    else:
+    elif results is not None:
         documents = {}
         for result in results:
             document = documents.setdefault(
@@ -242,14 +255,22 @@ if query:
                         f"**Page {result['page']}** · "
                         f"Match count: **{result['match_count']}**"
                     )
-                    st.html(_highlight_snippet_html(result["snippet"], query))
+                    st.html(
+                        _highlight_snippet_html(
+                            result["snippet"], result["matched_terms"]
+                        )
+                    )
 
                     if st.button(
                         f"Open PDF at page {result['page']}",
                         key=f"open_{document_idx}_{page_idx}",
                     ):
                         opened = open_pdf_at_page(
-                            document["path"], result["page"], query
+                            document["path"],
+                            result["page"],
+                            result["matched_terms"][0]
+                            if result["matched_terms"]
+                            else "",
                         )
                         if not opened:
                             st.error(

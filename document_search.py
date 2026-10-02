@@ -6,15 +6,189 @@ import fitz
 
 from data_config import DEFAULT_INDEX_PATH, DEFAULT_PDF_DIR
 
+INDEX_VERSION = 2
+_CONTENTS_HEADINGS = {"contents", "table of contents"}
+_REFERENCE_HEADING = re.compile(
+    r"^(?:(?:[a-z]-?)?\d+(?:\.\d+)*\s+)?"
+    r"(?:references|bibliography|works cited)$",
+    re.IGNORECASE,
+)
+_CONTENTS_ENTRY = re.compile(
+    r"^\d+(?:\.\d+)*\.?\s+\S.+\s+"
+    r"(?:[ivxlcdm]+|\d+(?:-\d+)?|\d+)$",
+    re.IGNORECASE,
+)
 
-def normalize_query(query: str) -> str:
-    return " ".join(str(query or "").strip().split()).lower()
+
+class QuerySyntaxError(ValueError):
+    pass
+
+
+def _tokenize_query(query: str) -> list[tuple[str, str]]:
+    token_pattern = re.compile(r'"((?:\\.|[^"\\])*)"|(\()|(\))|([^\s()"]+)')
+    tokens = []
+    cursor = 0
+    for match in token_pattern.finditer(query):
+        if query[cursor : match.start()].strip():
+            raise QuerySyntaxError("Use double quotes to search for an exact phrase.")
+        cursor = match.end()
+
+        phrase, left_paren, right_paren, word = match.groups()
+        if phrase is not None:
+            phrase = re.sub(r'\\(["\\])', r"\1", phrase)
+            if not phrase.strip():
+                raise QuerySyntaxError("Quoted phrases cannot be empty.")
+            tokens.append(("TERM", phrase))
+        elif left_paren:
+            tokens.append(("LPAREN", left_paren))
+        elif right_paren:
+            tokens.append(("RPAREN", right_paren))
+        else:
+            operator = word.upper()
+            if operator in {"AND", "OR", "NOT"}:
+                tokens.append((operator, operator))
+            else:
+                tokens.append(("TERM", word))
+
+    if query[cursor:].strip():
+        raise QuerySyntaxError("Unclosed quote or invalid search syntax.")
+    return tokens
+
+
+def _parse_query(query: str) -> tuple:
+    tokens = _tokenize_query(query)
+    if not tokens:
+        raise QuerySyntaxError("Enter a search term.")
+    position = 0
+
+    def parse_primary() -> tuple:
+        nonlocal position
+        if position >= len(tokens):
+            raise QuerySyntaxError("Expected a search term.")
+        token_type, value = tokens[position]
+        if token_type == "TERM":
+            position += 1
+            return ("TERM", value)
+        if token_type == "LPAREN":
+            position += 1
+            expression = parse_or()
+            if position >= len(tokens) or tokens[position][0] != "RPAREN":
+                raise QuerySyntaxError("Missing closing parenthesis.")
+            position += 1
+            return expression
+        if token_type == "RPAREN":
+            raise QuerySyntaxError("Unexpected closing parenthesis.")
+        raise QuerySyntaxError(f"Expected a search term before {value}.")
+
+    def parse_not() -> tuple:
+        nonlocal position
+        if position < len(tokens) and tokens[position][0] == "NOT":
+            position += 1
+            return ("NOT", parse_not())
+        return parse_primary()
+
+    def parse_and() -> tuple:
+        nonlocal position
+        expression = parse_not()
+        while position < len(tokens) and tokens[position][0] == "AND":
+            position += 1
+            expression = ("AND", expression, parse_not())
+        return expression
+
+    def parse_or() -> tuple:
+        nonlocal position
+        expression = parse_and()
+        while position < len(tokens) and tokens[position][0] == "OR":
+            position += 1
+            expression = ("OR", expression, parse_and())
+        return expression
+
+    parsed = parse_or()
+    if position < len(tokens):
+        token_type, value = tokens[position]
+        if token_type == "RPAREN":
+            raise QuerySyntaxError("Unexpected closing parenthesis.")
+        if token_type in {"AND", "OR", "NOT"}:
+            raise QuerySyntaxError(f"Expected a search term after {value}.")
+        raise QuerySyntaxError("Use AND, OR, or NOT between search terms.")
+    return parsed
+
+
+def _evaluate_query(expression: tuple, text: str) -> tuple[bool, list[str]]:
+    kind = expression[0]
+    if kind == "TERM":
+        term = expression[1]
+        return term.casefold() in text.casefold(), [term]
+    if kind == "NOT":
+        matched, _ = _evaluate_query(expression[1], text)
+        return not matched, []
+
+    left_match, left_terms = _evaluate_query(expression[1], text)
+    right_match, right_terms = _evaluate_query(expression[2], text)
+    if kind == "AND":
+        if left_match and right_match:
+            return True, left_terms + right_terms
+        return False, []
+    if left_match or right_match:
+        return True, (left_terms if left_match else []) + (
+            right_terms if right_match else []
+        )
+    return False, []
 
 
 def _clean_text(text: str) -> str:
     text = text.replace("\x00", "")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def _is_contents_heading(line: str) -> bool:
+    normalized = re.sub(r"\s+", " ", line).strip(" .:-").casefold()
+    return normalized in _CONTENTS_HEADINGS
+
+
+def _looks_like_contents_continuation(page_text: str) -> bool:
+    lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+    contents_entries = sum(
+        bool(_CONTENTS_ENTRY.match(line))
+        or bool(re.search(r"(?:\.{2,}|…{2,})\s*(?:[ivxlcdm]+|\d+)$", line, re.I))
+        for line in lines
+    )
+    return contents_entries >= 3
+
+
+def _find_excluded_pages(pdf_doc) -> set[int]:
+    page_texts = [page.get_text("text") for page in pdf_doc]
+    contents_pages = set()
+    in_contents = False
+
+    for page_number, text in enumerate(page_texts, start=1):
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        has_contents_heading = any(
+            _is_contents_heading(line) for line in lines[:15]
+        )
+        if has_contents_heading:
+            contents_pages.add(page_number)
+            in_contents = True
+        elif in_contents and _looks_like_contents_continuation(text):
+            contents_pages.add(page_number)
+        else:
+            in_contents = False
+
+    reference_start = None
+    for page_number, text in enumerate(page_texts, start=1):
+        if page_number in contents_pages:
+            continue
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if any(_REFERENCE_HEADING.fullmatch(line) for line in lines[:20]):
+            reference_start = page_number
+            break
+
+    if reference_start is None:
+        return contents_pages
+    return contents_pages | set(
+        range(reference_start, len(page_texts) + 1)
+    )
 
 
 def _extract_title(pdf_doc, fallback: str) -> str:
@@ -82,13 +256,18 @@ def _extract_title(pdf_doc, fallback: str) -> str:
     return fallback
 
 
-def _build_snippet(text: str, keyword: str, pad: int = 140) -> str:
-    lowered = text.lower()
-    kw = keyword.lower()
-    start = lowered.find(kw)
-    if start == -1:
+def _build_snippet(text: str, keywords: list[str], pad: int = 140) -> str:
+    lowered = text.casefold()
+    occurrences = [
+        (lowered.find(keyword.casefold()), keyword)
+        for keyword in keywords
+        if keyword
+    ]
+    occurrences = [(start, keyword) for start, keyword in occurrences if start >= 0]
+    if not occurrences:
         return _clean_text(text[:pad * 2])
 
+    start, keyword = min(occurrences, key=lambda occurrence: occurrence[0])
     snippet_start = max(0, start - pad)
     snippet_end = min(len(text), start + len(keyword) + pad)
     snippet = text[snippet_start:snippet_end]
@@ -112,7 +291,10 @@ def build_index(pdf_dir: str | Path = DEFAULT_PDF_DIR, output_path: str | Path =
             continue
 
         title = _extract_title(pdf_doc, pdf_path.name)
+        excluded_pages = _find_excluded_pages(pdf_doc)
         for page_number, page in enumerate(pdf_doc, start=1):
+            if page_number in excluded_pages:
+                continue
             page_text = _clean_text(page.get_text("text"))
             if not page_text:
                 continue
@@ -121,6 +303,7 @@ def build_index(pdf_dir: str | Path = DEFAULT_PDF_DIR, output_path: str | Path =
                     "document": pdf_path.name,
                     "title": title,
                     "file_path": str(pdf_path.relative_to(pdf_dir)),
+                    "index_version": INDEX_VERSION,
                     "page": page_number,
                     "text": page_text,
                 }
@@ -142,6 +325,10 @@ def load_index(
 
     with index_path.open("r", encoding="utf-8") as fh:
         payload = json.load(fh)
+    if payload and any(
+        record.get("index_version") != INDEX_VERSION for record in payload
+    ):
+        payload = build_index(pdf_dir, index_path)
     return payload
 
 
@@ -151,18 +338,19 @@ def find_keyword(
     limit: int = 20,
     pdf_dir: str | Path = DEFAULT_PDF_DIR,
 ):
-    keyword = normalize_query(query)
-    if not keyword:
+    if not query.strip():
         return []
+    expression = _parse_query(query)
 
     matches = []
     title_cache = {}
     for record in load_index(index_path, pdf_dir):
         page_text = record["text"]
-        lowered_text = page_text.lower()
-        if keyword not in lowered_text:
+        matched, matched_terms = _evaluate_query(expression, page_text)
+        if not matched:
             continue
 
+        matched_terms = list(dict.fromkeys(matched_terms))
         record_path = Path(record["file_path"])
         pdf_path = (
             record_path
@@ -183,18 +371,23 @@ def find_keyword(
                     title_cache[file_path] = record["document"]
             title = title_cache[file_path]
 
-        match_count = lowered_text.count(keyword)
-        snippet = _build_snippet(page_text, keyword)
+        match_count = sum(
+            page_text.casefold().count(term.casefold()) for term in matched_terms
+        )
+        snippet = _build_snippet(page_text, matched_terms)
         matches.append(
             {
                 "document": record["document"],
                 "title": title,
                 "page": record["page"],
                 "match_count": match_count,
+                "matched_terms": matched_terms,
                 "snippet": snippet,
                 "path": str(pdf_path),
             }
         )
 
-    matches.sort(key=lambda item: (-item["match_count"], item["document"], item["page"]))
+    matches.sort(
+        key=lambda item: (item["document"].casefold(), item["page"])
+    )
     return matches[:limit]

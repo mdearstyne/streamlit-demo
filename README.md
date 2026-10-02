@@ -1,4 +1,4 @@
-# Document repository search
+# Pretested Question Resource
 
 ## Local setup
 
@@ -33,7 +33,24 @@ Run the app from the project root:
 streamlit run app.py
 ```
 
+The checked-in Streamlit configuration enables reruns when Python source files
+are saved, so edits to the app and its imported modules appear automatically.
+
+Search supports explicit `AND`, `OR`, and `NOT` operators, parentheses, and
+quoted phrases. For example:
+
+```text
+survey AND (response OR "data collection") AND NOT phone
+```
+
+`NOT` is evaluated before `AND`, and `AND` before `OR`. Use double quotes when
+searching for a phrase.
+
 The app creates or rebuilds the search index from the selected PDF folder.
+Pages identified as tables of contents are omitted, as are pages from a
+standalone References/Bibliography/Works Cited heading through the end of that
+document. The index is rebuilt automatically when its format or exclusion rules
+change.
 Local PDFs, `.env`, and the generated index are ignored by Git; do not commit
 large datasets or machine-specific paths.
 
