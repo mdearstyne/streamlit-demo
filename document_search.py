@@ -19,6 +19,71 @@ def _clean_text(text: str) -> str:
     return text.strip()
 
 
+def _extract_title(pdf_doc, fallback: str) -> str:
+    metadata_title = _clean_text(pdf_doc.metadata.get("title") or "")
+    if metadata_title:
+        return metadata_title
+
+    if len(pdf_doc) == 0:
+        return fallback
+
+    page = pdf_doc[0]
+    formatted_lines = []
+    for block in page.get_text("dict")["blocks"]:
+        for line in block.get("lines", []):
+            spans = line["spans"]
+            text = _clean_text(" ".join(span["text"] for span in spans))
+            if text:
+                formatted_lines.append(
+                    (text, any("bold" in span["font"].lower() for span in spans))
+                )
+
+    series_index = next(
+        (
+            index
+            for index, (line, _) in enumerate(formatted_lines)
+            if line.upper().startswith("RESEARCH REPORT SERIES")
+        ),
+        None,
+    )
+    if series_index is not None:
+        title_lines = []
+        for line, is_bold in formatted_lines[series_index + 1 :]:
+            if line.startswith("(Survey Methodology"):
+                continue
+            if is_bold:
+                title_lines.append(line)
+            elif title_lines:
+                break
+        if title_lines:
+            return _clean_text(" ".join(title_lines))
+
+    lines = page.get_text("text").splitlines()
+    series_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.strip().upper().startswith("RESEARCH REPORT SERIES")
+        ),
+        None,
+    )
+    if series_index is not None:
+        title_lines = []
+        for line in lines[series_index + 1 :]:
+            line = line.strip()
+            if not line:
+                if title_lines:
+                    break
+                continue
+            if line.startswith("(Survey Methodology"):
+                continue
+            title_lines.append(line)
+        if title_lines:
+            return _clean_text(" ".join(title_lines))
+
+    return fallback
+
+
 def _build_snippet(text: str, keyword: str, pad: int = 140) -> str:
     lowered = text.lower()
     kw = keyword.lower()
@@ -48,6 +113,7 @@ def build_index(pdf_dir: str | Path = DEFAULT_PDF_DIR, output_path: str | Path =
             print(f"Skipping unreadable PDF: {pdf_path} ({exc})")
             continue
 
+        title = _extract_title(pdf_doc, pdf_path.name)
         for page_number, page in enumerate(pdf_doc, start=1):
             page_text = _clean_text(page.get_text("text"))
             if not page_text:
@@ -55,6 +121,7 @@ def build_index(pdf_dir: str | Path = DEFAULT_PDF_DIR, output_path: str | Path =
             records.append(
                 {
                     "document": pdf_path.name,
+                    "title": title,
                     "file_path": str(pdf_path),
                     "page": page_number,
                     "text": page_text,
@@ -83,17 +150,33 @@ def find_keyword(query: str, index_path: str | Path = DEFAULT_INDEX_PATH, limit:
         return []
 
     matches = []
+    title_cache = {}
     for record in load_index(index_path):
         page_text = record["text"]
         lowered_text = page_text.lower()
         if keyword not in lowered_text:
             continue
 
+        title = record.get("title")
+        if not title:
+            file_path = record["file_path"]
+            if file_path not in title_cache:
+                pdf_path = Path(file_path)
+                if pdf_path.exists():
+                    with fitz.open(str(pdf_path)) as pdf_doc:
+                        title_cache[file_path] = _extract_title(
+                            pdf_doc, record["document"]
+                        )
+                else:
+                    title_cache[file_path] = record["document"]
+            title = title_cache[file_path]
+
         match_count = lowered_text.count(keyword)
         snippet = _build_snippet(page_text, keyword)
         matches.append(
             {
                 "document": record["document"],
+                "title": title,
                 "page": record["page"],
                 "match_count": match_count,
                 "snippet": snippet,

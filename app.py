@@ -1,6 +1,8 @@
 import functools
+import html
 import http.server
 import os
+import re
 import shutil
 import socketserver
 import subprocess
@@ -11,9 +13,30 @@ from urllib.parse import quote
 
 import streamlit as st
 
-from document_search import DEFAULT_PDF_DIR, DEFAULT_INDEX_PATH, build_index, find_keyword
+from document_search import (
+    DEFAULT_PDF_DIR,
+    DEFAULT_INDEX_PATH,
+    build_index,
+    find_keyword,
+    normalize_query,
+)
 
 _PDF_SERVERS = {}
+
+
+def _highlight_snippet_html(snippet: str, query: str) -> str:
+    search_term = normalize_query(query)
+    if not search_term:
+        return html.escape(snippet)
+
+    highlighted_parts = []
+    cursor = 0
+    for match in re.finditer(re.escape(search_term), snippet, re.IGNORECASE):
+        highlighted_parts.append(html.escape(snippet[cursor : match.start()]))
+        highlighted_parts.append(f"<mark>{html.escape(match.group())}</mark>")
+        cursor = match.end()
+    highlighted_parts.append(html.escape(snippet[cursor:]))
+    return "".join(highlighted_parts)
 
 
 class QuietDirectoryHandler(http.server.SimpleHTTPRequestHandler):
@@ -50,7 +73,9 @@ def _get_or_create_pdf_server(pdf_dir: str | Path):
     return f"http://127.0.0.1:{server.server_address[1]}", pdf_dir
 
 
-def build_browser_pdf_url(pdf_path: str | Path, page_number: int):
+def build_browser_pdf_url(
+    pdf_path: str | Path, page_number: int, search_term: str = ""
+):
     pdf_path = Path(pdf_path).resolve()
     if not pdf_path.exists():
         return None
@@ -58,7 +83,13 @@ def build_browser_pdf_url(pdf_path: str | Path, page_number: int):
     server_url, pdf_dir = _get_or_create_pdf_server(pdf_dir=pdf_path.parent)
     relative_path = pdf_path.relative_to(pdf_dir).as_posix()
     encoded_file = quote(server_url + "/" + relative_path, safe="")
-    return f"https://mozilla.github.io/pdf.js/web/viewer.html?file={encoded_file}#page={page_number}"
+    viewer_options = f"page={page_number}"
+    if search_term.strip():
+        viewer_options += f"&search={quote(search_term.strip(), safe='')}&phrase=true"
+    return (
+        "https://mozilla.github.io/pdf.js/web/viewer.html"
+        f"?file={encoded_file}#{viewer_options}"
+    )
 
 
 def detect_pdf_viewer():
@@ -82,12 +113,12 @@ def detect_pdf_viewer():
     return "None detected", None
 
 
-def open_pdf_at_page(pdf_path: str, page_number: int):
+def open_pdf_at_page(pdf_path: str, page_number: int, search_term: str = ""):
     pdf_path = str(pdf_path)
     if not os.path.exists(pdf_path):
         return False
 
-    browser_url = build_browser_pdf_url(pdf_path, page_number)
+    browser_url = build_browser_pdf_url(pdf_path, page_number, search_term)
     if browser_url:
         try:
             return bool(webbrowser.open_new_tab(browser_url))
@@ -182,17 +213,50 @@ if query:
     if not results:
         st.info(f"No matches found for '{query}'.")
     else:
-        st.write(f"Found {len(results)} matching results.")
-        for idx, result in enumerate(results):
-            st.markdown(f"### {result['document']} — Page {result['page']}")
-            st.markdown(f"Match count: **{result['match_count']}**")
-            st.write(result["snippet"])
-            st.caption(f"File path: {result['path']}")
+        documents = {}
+        for result in results:
+            document = documents.setdefault(
+                result["path"],
+                {
+                    "title": result.get("title") or result["document"],
+                    "path": result["path"],
+                    "pages": [],
+                },
+            )
+            document["pages"].append(result)
 
-            if st.button(f"Open PDF at page {result['page']}", key=f"open_{idx}"):
-                opened = open_pdf_at_page(result["path"], result["page"])
-                if not opened:
-                    st.error(f"Could not open the file automatically: {result['path']}")
-            st.divider()
+        st.write(
+            f"Found {len(results)} matching pages across "
+            f"{len(documents)} documents."
+        )
+        for document_idx, document in enumerate(documents.values()):
+            page_count = len(document["pages"])
+            page_label = "page" if page_count == 1 else "pages"
+            with st.expander(
+                f"{document['title']} · {page_count} matching {page_label}",
+                expanded=document_idx == 0,
+            ):
+                st.caption(f"File path: {document['path']}")
+                for page_idx, result in enumerate(document["pages"]):
+                    st.markdown(
+                        f"**Page {result['page']}** · "
+                        f"Match count: **{result['match_count']}**"
+                    )
+                    st.html(_highlight_snippet_html(result["snippet"], query))
+
+                    if st.button(
+                        f"Open PDF at page {result['page']}",
+                        key=f"open_{document_idx}_{page_idx}",
+                    ):
+                        opened = open_pdf_at_page(
+                            document["path"], result["page"], query
+                        )
+                        if not opened:
+                            st.error(
+                                f"Could not open the file automatically: "
+                                f"{document['path']}"
+                            )
+                    if page_idx < page_count - 1:
+                        st.divider()
 else:
     st.info("Enter a search term to begin.")
