@@ -4,22 +4,20 @@ import http.server
 import socketserver
 import threading
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
 from document_search import (
-    DEFAULT_PDF_DIR,
     DEFAULT_INDEX_PATH,
-    build_index,
-    find_keyword,
+    DEFAULT_PDF_DIR,
     QuerySyntaxError,
+    build_index,
     compile_search_terms_pattern,
+    find_keyword,
 )
-from data_config import PDF_ACCESS_MODE, PDF_BASE_URL
-
-_PDF_SERVERS: dict[str, socketserver.TCPServer] = {}
+from data_config import BUNDLED_PDF_DIR, PDF_ACCESS_MODE, PDF_BASE_URL
 
 
 def _deployment_setting(name: str, default: str) -> str:
@@ -46,18 +44,14 @@ class QuietTCPServer(socketserver.TCPServer):
     allow_reuse_address = True
 
 
-def _get_or_create_pdf_server(pdf_dir: str | Path) -> tuple[str, Path]:
-    resolved_dir = Path(pdf_dir).resolve()
-    key = str(resolved_dir)
-    server = _PDF_SERVERS.get(key)
-    if server is None:
-        handler = functools.partial(
-            QuietDirectoryHandler, directory=str(resolved_dir)
-        )
-        server = QuietTCPServer(("127.0.0.1", 0), handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        _PDF_SERVERS[key] = server
-    return f"http://127.0.0.1:{server.server_address[1]}", resolved_dir
+@st.cache_resource
+def _get_or_create_pdf_server(pdf_dir: str) -> socketserver.TCPServer:
+    handler = functools.partial(
+        QuietDirectoryHandler, directory=pdf_dir
+    )
+    server = QuietTCPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def build_local_pdf_url(
@@ -71,7 +65,8 @@ def build_local_pdf_url(
         raise ValueError("PDF path must be inside the configured PDF directory.")
     if not resolved_path.is_file():
         return None
-    server_url, _ = _get_or_create_pdf_server(resolved_dir)
+    server = _get_or_create_pdf_server(str(resolved_dir))
+    server_url = f"http://127.0.0.1:{server.server_address[1]}"
     return (
         f"{server_url}/{quote(relative_path.as_posix(), safe='/')}"
         f"#page={page_number}"
@@ -105,14 +100,46 @@ def build_public_pdf_url(
     return f"{encoded_pdf_url}#page={page_number}"
 
 
+def _append_path_to_app_url(app_url: str, path: str) -> str:
+    parsed_app_url = urlsplit(app_url)
+    if parsed_app_url.scheme not in {"http", "https"} or not parsed_app_url.netloc:
+        raise ValueError("Streamlit app URL must be an HTTP(S) URL.")
+    app_path = f"{parsed_app_url.path.rstrip('/')}{path}"
+    return urlunsplit(
+        (parsed_app_url.scheme, parsed_app_url.netloc, app_path, "", "")
+    )
+
+
 def build_cloud_static_pdf_url(
     pdf_path: str | Path,
     page_number: int,
     app_url: str,
     pdf_dir: str | Path,
 ) -> str:
-    pdf_base_url = (
-        f"{app_url.rstrip('/')}/~/+/app/static/pdfs"
+    if Path(pdf_dir).resolve() != BUNDLED_PDF_DIR.resolve():
+        raise ValueError(
+            "Cloud static PDF links require the bundled static PDF directory."
+        )
+    pdf_base_url = _append_path_to_app_url(
+        app_url, "/~/+/app/static/pdfs"
+    )
+    return build_public_pdf_url(
+        pdf_path, page_number, pdf_base_url, pdf_dir
+    )
+
+
+def build_local_static_pdf_url(
+    pdf_path: str | Path,
+    page_number: int,
+    app_url: str,
+    pdf_dir: str | Path,
+) -> str:
+    if Path(pdf_dir).resolve() != BUNDLED_PDF_DIR.resolve():
+        raise ValueError(
+            "Streamlit static PDF links require the bundled static PDF directory."
+        )
+    pdf_base_url = _append_path_to_app_url(
+        app_url, "/app/static/pdfs"
     )
     return build_public_pdf_url(
         pdf_path, page_number, pdf_base_url, pdf_dir
@@ -205,11 +232,22 @@ with st.sidebar:
             else f"PDFs open from the configured public host: {PDF_BASE_URL}"
         )
 
-pdf_dir_path = Path(pdf_dir)
+pdf_dir_path = Path(pdf_dir).expanduser().resolve()
 index_path = DEFAULT_INDEX_PATH
 
 if not pdf_dir_path.exists():
     st.error(f"The PDF folder does not exist: {pdf_dir_path}")
+    st.stop()
+
+if (
+    PDF_ACCESS_MODE == "public"
+    and not PDF_BASE_URL
+    and pdf_dir_path != BUNDLED_PDF_DIR.resolve()
+):
+    st.error(
+        "Set PDF_BASE_URL when using public access with a PDF folder other "
+        "than the bundled static PDFs."
+    )
     st.stop()
 
 if rebuild_index or not index_path.exists():
@@ -287,7 +325,17 @@ if query:
                             result["snippet"], result["matched_terms"]
                         )
                     )
-                    if PDF_ACCESS_MODE == "local":
+                    if (
+                        PDF_ACCESS_MODE == "local"
+                        and pdf_dir_path == BUNDLED_PDF_DIR.resolve()
+                    ):
+                        pdf_url = build_local_static_pdf_url(
+                            document["path"],
+                            result["page"],
+                            st.context.url,
+                            pdf_dir_path,
+                        )
+                    elif PDF_ACCESS_MODE == "local":
                         pdf_url = build_local_pdf_url(
                             document["path"], result["page"], pdf_dir_path
                         )

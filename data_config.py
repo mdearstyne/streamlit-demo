@@ -8,6 +8,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 LOCAL_DATA_DIR = ROOT_DIR / ".local-data"
 BUNDLED_PDF_DIR = ROOT_DIR / "static" / "pdfs"
+DEFAULT_DOWNLOAD_DIR = LOCAL_DATA_DIR / "pdfs"
 
 
 def _configured_path(variable: str, default: Path) -> Path:

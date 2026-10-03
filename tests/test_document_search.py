@@ -66,16 +66,17 @@ def test_build_public_pdf_url_rejects_paths_outside_pdf_directory(tmp_path):
         )
 
 
-def test_build_cloud_static_pdf_url_uses_cloud_app_route(tmp_path):
+def test_build_cloud_static_pdf_url_uses_cloud_app_route(tmp_path, monkeypatch):
     pdf_dir = tmp_path / "papers"
     pdf_dir.mkdir()
     pdf_path = pdf_dir / "report.pdf"
     pdf_path.write_bytes(b"%PDF")
+    monkeypatch.setattr(app, "BUNDLED_PDF_DIR", pdf_dir)
 
     pdf_url = app.build_cloud_static_pdf_url(
         pdf_path,
         20,
-        "https://demo.streamlit.app/",
+        "https://demo.streamlit.app/?search=survey#results",
         pdf_dir,
     )
 
@@ -87,11 +88,48 @@ def test_build_cloud_static_pdf_url_uses_cloud_app_route(tmp_path):
     assert parsed_pdf_url.fragment == "page=20"
 
 
+def test_build_cloud_static_pdf_url_rejects_nonbundled_directory(tmp_path):
+    pdf_path = tmp_path / "report.pdf"
+    pdf_path.write_bytes(b"%PDF")
+
+    with pytest.raises(ValueError, match="bundled static PDF directory"):
+        app.build_cloud_static_pdf_url(
+            pdf_path,
+            1,
+            "https://demo.streamlit.app",
+            tmp_path,
+        )
+
+
+def test_build_local_static_pdf_url_uses_documented_static_route(
+    tmp_path, monkeypatch
+):
+    pdf_dir = tmp_path / "papers"
+    pdf_dir.mkdir()
+    pdf_path = pdf_dir / "report.pdf"
+    pdf_path.write_bytes(b"%PDF")
+    monkeypatch.setattr(app, "BUNDLED_PDF_DIR", pdf_dir)
+
+    pdf_url = app.build_local_static_pdf_url(
+        pdf_path,
+        7,
+        "http://localhost:8501/",
+        pdf_dir,
+    )
+
+    parsed_pdf_url = urlsplit(pdf_url)
+    assert parsed_pdf_url.netloc == "localhost:8501"
+    assert parsed_pdf_url.path == "/app/static/pdfs/report.pdf"
+    assert parsed_pdf_url.fragment == "page=7"
+
+
 def test_default_pdf_directory_is_bundled_static_pdf_folder():
-    from data_config import BUNDLED_PDF_DIR
+    from data_config import BUNDLED_PDF_DIR, DEFAULT_DOWNLOAD_DIR
 
     assert BUNDLED_PDF_DIR.name == "pdfs"
     assert BUNDLED_PDF_DIR.parent.name == "static"
+    assert DEFAULT_DOWNLOAD_DIR.name == "pdfs"
+    assert DEFAULT_DOWNLOAD_DIR.parent.name == ".local-data"
     assert {path.name for path in BUNDLED_PDF_DIR.glob("*.pdf")} == {
         "rsm2023-11.pdf",
         "rsm2023-12.pdf",
@@ -117,10 +155,11 @@ def test_build_local_pdf_url_serves_pdf_in_browser(tmp_path):
     with urlopen(f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}") as response:
         assert response.read() == b"%PDF local test"
 
-    server_key = str(pdf_dir.resolve())
-    server = app._PDF_SERVERS.pop(server_key)
+    server = app._get_or_create_pdf_server(str(pdf_dir.resolve()))
+    assert app._get_or_create_pdf_server(str(pdf_dir.resolve())) is server
     server.shutdown()
     server.server_close()
+    app._get_or_create_pdf_server.clear()
 
 
 def test_build_local_pdf_url_rejects_paths_outside_pdf_directory(tmp_path):

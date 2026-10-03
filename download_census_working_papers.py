@@ -4,7 +4,7 @@ from pathlib import Path
 
 import requests
 
-from data_config import DEFAULT_PDF_DIR
+from data_config import DEFAULT_DOWNLOAD_DIR
 
 BASE_URL = "https://www.census.gov"
 LIST_URL = (
@@ -45,7 +45,7 @@ def extract_pdf_link(detail_html: str) -> str | None:
     return None
 
 
-def download_papers(output_dir: str | Path = DEFAULT_PDF_DIR) -> None:
+def download_papers(output_dir: str | Path = DEFAULT_DOWNLOAD_DIR) -> None:
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -80,8 +80,8 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_PDF_DIR,
-        help="Folder to save PDFs (defaults to DOCUMENTS_DIR or local data).",
+        default=DEFAULT_DOWNLOAD_DIR,
+        help="Folder to save PDFs (defaults to .local-data/pdfs).",
     )
     args = parser.parse_args()
     download_papers(args.output_dir)
