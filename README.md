@@ -49,10 +49,11 @@ searching for a phrase.
 
 Search results include author and publication year when they can be identified.
 Authors are taken first from a suggested citation, then PDF metadata, and
-finally from plausible author lines following the title. Publication year is
-taken from a report-issued date or, when that is unavailable, the report number.
-Use the sort control to order results by matching pages, title, author, or
-publication year.
+finally from plausible author lines following the title or a "Prepared by"
+credit when PDF metadata only names the Census Bureau. Publication year is
+taken from a report-issued date, a month/year on the cover, or the report
+number. Use the sort control to order results by matching pages, title, author,
+or publication year.
 
 The app creates or rebuilds the search index from the selected PDF folder.
 Recognized title pages and tables of contents are omitted, as are pages from a

@@ -6,8 +6,14 @@ import fitz
 
 from data_config import DEFAULT_INDEX_PATH, DEFAULT_PDF_DIR
 
-INDEX_VERSION = 5
+INDEX_VERSION = 7
 _CONTENTS_HEADINGS = {"contents", "table of contents"}
+_MONTH_YEAR = re.compile(
+    r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+    r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
+    r"Nov(?:ember)?|Dec(?:ember)?)\.?\s+((?:19|20)\d{2})\b",
+    re.IGNORECASE,
+)
 _TITLE_PAGE_MARKER = re.compile(
     r"^\s*(?:RESEARCH REPORT SERIES\b|Prepared for\s*:|Prepared by\s*:|"
     r"Title Page\s*$)",
@@ -306,35 +312,67 @@ def _extract_author(pdf_doc, title: str) -> str:
         return citation_author
 
     metadata_author = _clean_text(pdf_doc.metadata.get("author") or "")
-    if metadata_author.casefold() not in {"", "unknown", "none", "n/a"}:
+    normalized_metadata_author = metadata_author.casefold()
+    generic_metadata_authors = {
+        "",
+        "unknown",
+        "none",
+        "n/a",
+        "u.s. census bureau",
+        "us census bureau",
+        "united states census bureau",
+        "census bureau",
+    }
+    if normalized_metadata_author not in generic_metadata_authors:
         return metadata_author
 
     lines = pdf_doc[0].get_text("text").splitlines()
     page_text = " ".join(line.strip() for line in lines if line.strip())
     title_start = page_text.casefold().find(title.casefold())
-    if title_start < 0:
-        return ""
+    if title_start >= 0:
+        title_end = title_start + len(title)
+        line_offsets = []
+        cursor = 0
+        for line in lines:
+            cleaned_line = line.strip()
+            if not cleaned_line:
+                continue
+            line_offsets.append((cursor, cursor + len(cleaned_line), cleaned_line))
+            cursor += len(cleaned_line) + 1
 
-    title_end = title_start + len(title)
-    line_offsets = []
-    cursor = 0
-    for line in lines:
-        cleaned_line = line.strip()
-        if not cleaned_line:
-            continue
-        line_offsets.append((cursor, cursor + len(cleaned_line), cleaned_line))
-        cursor += len(cleaned_line) + 1
+        author_lines = []
+        for start, end, line in line_offsets:
+            if end <= title_end or start < title_end:
+                continue
+            if _AUTHOR_AFFILIATION.match(line):
+                break
+            if not _AUTHOR_LINE.fullmatch(line):
+                break
+            author_lines.append(re.sub(r"\s+\d+$", "", line))
+        if author_lines:
+            return "; ".join(author_lines)
 
-    author_lines = []
-    for start, end, line in line_offsets:
-        if end <= title_end or start < title_end:
-            continue
-        if _AUTHOR_AFFILIATION.match(line):
-            break
-        if not _AUTHOR_LINE.fullmatch(line):
-            break
-        author_lines.append(re.sub(r"\s+\d+$", "", line))
-    return "; ".join(author_lines)
+    prepared_by = _extract_prepared_by(pdf_doc)
+    if prepared_by:
+        return prepared_by
+    return metadata_author
+
+
+def _extract_prepared_by(pdf_doc) -> str:
+    for page in pdf_doc:
+        lines = page.get_text("text").splitlines()
+        for index, line in enumerate(lines):
+            match = re.match(r"^\s*Prepared\s+by\s*:?\s*(.*)$", line, re.I)
+            if not match:
+                continue
+            value = match.group(1).strip(" \t:;,.")
+            if value:
+                return value
+            for following_line in lines[index + 1 :]:
+                value = following_line.strip(" \t:;,.")
+                if value:
+                    return value
+    return ""
 
 
 def _extract_citation_author(pdf_doc) -> str:
@@ -375,6 +413,10 @@ def _extract_publication_year(pdf_doc) -> int | None:
     )
     if issued_year:
         return int(issued_year.group(1))
+
+    cover_year = _MONTH_YEAR.search(first_page)
+    if cover_year:
+        return int(cover_year.group(1))
 
     series_year = re.search(
         r"\bSurvey Methodology\s*#\s*((?:19|20)\d{2})-\d+\b",

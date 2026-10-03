@@ -210,6 +210,21 @@ def test_publication_year_prefers_report_issued_date(tmp_path):
     assert records[0]["year"] == 2024
 
 
+def test_publication_year_uses_cover_month_and_year(tmp_path):
+    pdf_path = tmp_path / "report.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "February 2025")
+    page.insert_text((72, 100), "Results of ASEC Cognitive Interviews, Round 1")
+    page.insert_text((72, 125), "Report text about interviews.")
+    doc.save(pdf_path)
+    doc.close()
+
+    records = build_index(tmp_path, tmp_path / "index.json")
+
+    assert records[0]["year"] == 2025
+
+
 def test_suggested_citation_author_overrides_generic_metadata(tmp_path):
     pdf_path = tmp_path / "report.pdf"
     doc = fitz.open()
@@ -236,6 +251,27 @@ def test_suggested_citation_author_overrides_generic_metadata(tmp_path):
     assert records[0]["author"] == (
         "Y. Patrick Hsieh, Katherine Blackburn, Patty LeBaron and Aleia Clark Fobia"
     )
+
+
+def test_prepared_by_is_used_when_metadata_author_is_generic(tmp_path):
+    pdf_path = tmp_path / "report.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "February 2025")
+    page.insert_text((72, 100), "Results of ASEC Cognitive Interviews, Round 1")
+    page.insert_text((72, 125), "Prepared for:")
+    page.insert_text((72, 140), "U.S. Census Bureau")
+    page.insert_text((72, 175), "Prepared by:")
+    page.insert_text((72, 190), "RTI International")
+    page.insert_text((72, 215), "Report text about interviews.")
+    doc.new_page().insert_text((72, 72), "The report discusses interview methods.")
+    doc.set_metadata({"author": "U.S. Census Bureau"})
+    doc.save(pdf_path)
+    doc.close()
+
+    records = build_index(tmp_path, tmp_path / "index.json")
+
+    assert records[0]["author"] == "RTI International"
 
 
 def test_sort_documents_by_matching_pages_title_author_and_year():
