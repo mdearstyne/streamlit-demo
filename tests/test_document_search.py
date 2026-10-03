@@ -1,5 +1,5 @@
 import json
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 import fitz
@@ -35,39 +35,32 @@ def test_highlight_snippet_marks_multiple_boolean_terms():
     )
 
 
-def test_build_public_pdf_viewer_url_uses_configured_url_and_page(tmp_path):
+def test_build_public_pdf_url_opens_pdf_directly_at_page(tmp_path):
     pdf_dir = tmp_path / "papers"
     pdf_dir.mkdir()
     pdf_path = pdf_dir / "report with spaces.pdf"
     pdf_path.write_bytes(b"%PDF")
 
-    viewer_url = app.build_public_pdf_viewer_url(
+    pdf_url = app.build_public_pdf_url(
         pdf_path,
         12,
-        "survey & response",
         "https://documents.example.org/working-papers/",
         pdf_dir,
     )
 
-    parsed_viewer_url = urlsplit(viewer_url)
-    viewer_query = parse_qs(parsed_viewer_url.query)
-    assert parsed_viewer_url.netloc == "mozilla.github.io"
-    assert viewer_query["file"][0] == (
-        "https://documents.example.org/working-papers/report%20with%20spaces.pdf"
+    parsed_pdf_url = urlsplit(pdf_url)
+    assert parsed_pdf_url.netloc == "documents.example.org"
+    assert parsed_pdf_url.path == (
+        "/working-papers/report%20with%20spaces.pdf"
     )
-    assert parse_qs(parsed_viewer_url.fragment) == {
-        "page": ["12"],
-        "search": ["survey & response"],
-        "phrase": ["true"],
-    }
+    assert parsed_pdf_url.fragment == "page=12"
 
 
-def test_build_public_pdf_viewer_url_rejects_paths_outside_pdf_directory(tmp_path):
+def test_build_public_pdf_url_rejects_paths_outside_pdf_directory(tmp_path):
     with pytest.raises(ValueError):
-        app.build_public_pdf_viewer_url(
+        app.build_public_pdf_url(
             tmp_path.parent / "report.pdf",
             1,
-            "",
             "https://documents.example.org/papers",
             tmp_path,
         )

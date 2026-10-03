@@ -20,8 +20,8 @@ works when opening Streamlit from that same machine.
 For hosted deployment, set `PDF_ACCESS_MODE=public` in Streamlit Community
 Cloud's app secrets. With the bundled PDFs, the app automatically uses its
 `/app/static/pdfs/` URL. To use PDFs hosted elsewhere, also set `PDF_BASE_URL`
-to their public HTTP(S) base URL. That host must allow cross-origin requests
-from users' browsers so PDF.js can load the files.
+to their public HTTP(S) base URL. PDFs are opened directly in the browser, so
+cross-origin access is not required.
 
 To download the full Census working-paper collection into a custom documents
 folder:

@@ -78,14 +78,12 @@ def build_local_pdf_url(
     )
 
 
-def build_public_pdf_viewer_url(
+def build_public_pdf_url(
     pdf_path: str | Path,
     page_number: int,
-    search_term: str,
     pdf_base_url: str,
     pdf_dir: str | Path,
 ) -> str:
-
     parsed_base_url = urlsplit(pdf_base_url)
     if (
         parsed_base_url.scheme not in {"http", "https"}
@@ -100,17 +98,11 @@ def build_public_pdf_viewer_url(
     relative_path = Path(pdf_path).resolve().relative_to(
         Path(pdf_dir).resolve()
     )
-    encoded_pdf_url = quote(
-        f"{pdf_base_url.rstrip('/')}/{quote(relative_path.as_posix(), safe='/')}",
-        safe="",
+    encoded_pdf_url = (
+        f"{pdf_base_url.rstrip('/')}/"
+        f"{quote(relative_path.as_posix(), safe='/')}"
     )
-    viewer_options = f"page={page_number}"
-    if search_term.strip():
-        viewer_options += f"&search={quote(search_term.strip(), safe='')}&phrase=true"
-    return (
-        "https://mozilla.github.io/pdf.js/web/viewer.html"
-        f"?file={encoded_pdf_url}#{viewer_options}"
-    )
+    return f"{encoded_pdf_url}#page={page_number}"
 
 
 def _highlight_snippet_html(snippet: str, search_terms: list[str]) -> str:
@@ -289,12 +281,9 @@ if query:
                         public_pdf_base_url = PDF_BASE_URL or (
                             f"{st.context.url.rstrip('/')}/app/static/pdfs"
                         )
-                        pdf_url = build_public_pdf_viewer_url(
+                        pdf_url = build_public_pdf_url(
                             document["path"],
                             result["page"],
-                            result["matched_terms"][0]
-                            if result["matched_terms"]
-                            else "",
                             public_pdf_base_url,
                             pdf_dir_path,
                         )
