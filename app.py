@@ -105,6 +105,20 @@ def build_public_pdf_url(
     return f"{encoded_pdf_url}#page={page_number}"
 
 
+def build_cloud_static_pdf_url(
+    pdf_path: str | Path,
+    page_number: int,
+    app_url: str,
+    pdf_dir: str | Path,
+) -> str:
+    pdf_base_url = (
+        f"{app_url.rstrip('/')}/~/+/app/static/pdfs"
+    )
+    return build_public_pdf_url(
+        pdf_path, page_number, pdf_base_url, pdf_dir
+    )
+
+
 def _highlight_snippet_html(snippet: str, search_terms: list[str]) -> str:
     search_terms = sorted(set(search_terms), key=len, reverse=True)
     if not search_terms:
@@ -277,14 +291,18 @@ if query:
                         pdf_url = build_local_pdf_url(
                             document["path"], result["page"], pdf_dir_path
                         )
-                    else:
-                        public_pdf_base_url = PDF_BASE_URL or (
-                            f"{st.context.url.rstrip('/')}/app/static/pdfs"
-                        )
+                    elif PDF_BASE_URL:
                         pdf_url = build_public_pdf_url(
                             document["path"],
                             result["page"],
-                            public_pdf_base_url,
+                            PDF_BASE_URL,
+                            pdf_dir_path,
+                        )
+                    else:
+                        pdf_url = build_cloud_static_pdf_url(
+                            document["path"],
+                            result["page"],
+                            st.context.url,
                             pdf_dir_path,
                         )
                     if pdf_url:

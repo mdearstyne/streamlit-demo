@@ -18,10 +18,10 @@ machine running the app for browser viewing during local development. This
 works when opening Streamlit from that same machine.
 
 For hosted deployment, set `PDF_ACCESS_MODE=public` in Streamlit Community
-Cloud's app secrets. With the bundled PDFs, the app automatically uses its
-`/app/static/pdfs/` URL. To use PDFs hosted elsewhere, also set `PDF_BASE_URL`
-to their public HTTP(S) base URL. PDFs are opened directly in the browser, so
-cross-origin access is not required.
+Cloud's app secrets. With the bundled PDFs, the app automatically uses
+Streamlit Cloud's app route for the static files. To use PDFs hosted elsewhere,
+also set `PDF_BASE_URL` to their public HTTP(S) base URL. PDFs are opened
+directly in the browser, so cross-origin access is not required.
 
 To download the full Census working-paper collection into a custom documents
 folder:
@@ -74,7 +74,7 @@ large datasets or machine-specific paths.
 
 Community Cloud serves bundled PDFs from `static/pdfs/` because static serving
 is enabled in `.streamlit/config.toml`. Set `PDF_ACCESS_MODE=public` in the
-app's secrets; bundled PDF links then use the deployed app's own URL. If using
-an alternate document folder, ensure the files are also reachable at the
-configured `PDF_BASE_URL`. Do not use local mode for a hosted deployment: its
-PDF links point to the server's loopback interface.
+app's secrets; bundled PDF links then use the Cloud app route that serves static
+files. If using an alternate document folder, ensure the files are also
+reachable at the configured `PDF_BASE_URL`. Do not use local mode for a hosted
+deployment: its PDF links point to the server's loopback interface.

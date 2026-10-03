@@ -66,6 +66,27 @@ def test_build_public_pdf_url_rejects_paths_outside_pdf_directory(tmp_path):
         )
 
 
+def test_build_cloud_static_pdf_url_uses_cloud_app_route(tmp_path):
+    pdf_dir = tmp_path / "papers"
+    pdf_dir.mkdir()
+    pdf_path = pdf_dir / "report.pdf"
+    pdf_path.write_bytes(b"%PDF")
+
+    pdf_url = app.build_cloud_static_pdf_url(
+        pdf_path,
+        20,
+        "https://demo.streamlit.app/",
+        pdf_dir,
+    )
+
+    parsed_pdf_url = urlsplit(pdf_url)
+    assert parsed_pdf_url.netloc == "demo.streamlit.app"
+    assert parsed_pdf_url.path == (
+        "/~/+/app/static/pdfs/report.pdf"
+    )
+    assert parsed_pdf_url.fragment == "page=20"
+
+
 def test_default_pdf_directory_is_bundled_static_pdf_folder():
     from data_config import BUNDLED_PDF_DIR
 
