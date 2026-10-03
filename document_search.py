@@ -6,8 +6,13 @@ import fitz
 
 from data_config import DEFAULT_INDEX_PATH, DEFAULT_PDF_DIR
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 _CONTENTS_HEADINGS = {"contents", "table of contents"}
+_TITLE_PAGE_MARKER = re.compile(
+    r"^\s*(?:RESEARCH REPORT SERIES\b|Prepared for\s*:|Prepared by\s*:|"
+    r"Title Page\s*$)",
+    re.IGNORECASE,
+)
 _REFERENCE_HEADING = re.compile(
     r"^(?:(?:[a-z]-?)?\d+(?:\.\d+)*\s+)?"
     r"(?:references|bibliography|works cited)$",
@@ -170,10 +175,15 @@ def _looks_like_contents_continuation(page_text: str) -> bool:
 def _find_excluded_pages(pdf_doc) -> set[int]:
     page_texts = [page.get_text("text") for page in pdf_doc]
     contents_pages = set()
+    title_pages = set()
     in_contents = False
 
     for page_number, text in enumerate(page_texts, start=1):
         lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if page_number <= 5 and any(
+            _TITLE_PAGE_MARKER.match(line) for line in lines[:20]
+        ):
+            title_pages.add(page_number)
         has_contents_heading = any(
             _is_contents_heading(line) for line in lines[:15]
         )
@@ -195,8 +205,8 @@ def _find_excluded_pages(pdf_doc) -> set[int]:
             break
 
     if reference_start is None:
-        return contents_pages
-    return contents_pages | set(
+        return contents_pages | title_pages
+    return contents_pages | title_pages | set(
         range(reference_start, len(page_texts) + 1)
     )
 
@@ -438,7 +448,6 @@ def load_index(
 def find_keyword(
     query: str,
     index_path: str | Path = DEFAULT_INDEX_PATH,
-    limit: int = 20,
     pdf_dir: str | Path = DEFAULT_PDF_DIR,
 ):
     if not query.strip():
@@ -495,4 +504,4 @@ def find_keyword(
     matches.sort(
         key=lambda item: (item["document"].casefold(), item["page"])
     )
-    return matches[:limit]
+    return matches

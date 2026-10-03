@@ -256,7 +256,11 @@ if rebuild_index or not index_path.exists():
         build_index(pdf_dir_path, index_path)
     st.success(f"Indexed documents from {pdf_dir_path}")
 
-query = st.text_input("Search keyword or phrase", value='"survey response"')
+query = st.text_input(
+    "Search keyword or phrase",
+    value="",
+    placeholder="Enter a search term or phrase to begin",
+)
 st.caption(
     'Use AND, OR, NOT, parentheses, and double quotes for exact phrases. '
     'Example: survey AND (response OR "data collection") AND NOT phone'
@@ -304,7 +308,7 @@ if query:
             page_label = "page" if page_count == 1 else "pages"
             with st.expander(
                 f"{document['title']} · {page_count} matching {page_label}",
-                expanded=document_idx == 0,
+                expanded=False,
             ):
                 st.caption(
                     f"Author: {document['author'] or 'Not available'} · "
@@ -340,5 +344,3 @@ if query:
                             )
                     if page_idx < page_count - 1:
                         st.divider()
-else:
-    st.info("Enter a search term to begin.")

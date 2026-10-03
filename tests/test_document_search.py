@@ -48,7 +48,9 @@ def test_build_index_and_keyword_search(tmp_path):
     )
     page.insert_text((72, 145), "Cognitive Interview Results", fontsize=16, fontname="hebo")
     page.insert_text((72, 185), "Kristen Giombi")
-    page.insert_text((72, 215), "This is a survey response test for the research project.")
+    doc.new_page().insert_text(
+        (72, 72), "This is a survey response test for the research project."
+    )
     doc.save(pdf_path)
     doc.close()
 
@@ -63,7 +65,7 @@ def test_build_index_and_keyword_search(tmp_path):
     assert records[0]["author"] == "Kristen Giombi"
     assert records[0]["year"] == 2024
     assert records[0]["file_path"] == "sample.pdf"
-    assert records[0]["page"] == 1
+    assert records[0]["page"] == 2
 
     results = find_keyword("response", index_path, pdf_dir=tmp_path)
     assert len(results) >= 1
@@ -71,7 +73,7 @@ def test_build_index_and_keyword_search(tmp_path):
     assert results[0]["title"] == records[0]["title"]
     assert results[0]["author"] == records[0]["author"]
     assert results[0]["year"] == records[0]["year"]
-    assert results[0]["page"] == 1
+    assert results[0]["page"] == 2
     assert results[0]["matched_terms"] == ["response"]
     assert "response" in results[0]["snippet"].lower()
 
@@ -284,6 +286,27 @@ def test_boolean_search_operators_precedence_and_phrases(tmp_path):
     }
 
 
+def test_search_returns_all_matching_pages_without_a_limit(tmp_path):
+    index_path = tmp_path / "index.json"
+    records = [
+        {
+            "document": "report.pdf",
+            "title": "Report",
+            "file_path": "report.pdf",
+            "index_version": INDEX_VERSION,
+            "page": page_number,
+            "text": f"alpha occurrence on page {page_number}",
+        }
+        for page_number in range(1, 26)
+    ]
+    index_path.write_text(json.dumps(records), encoding="utf-8")
+
+    results = find_keyword("alpha", index_path, pdf_dir=tmp_path)
+
+    assert len(results) == 25
+    assert [result["page"] for result in results] == list(range(1, 26))
+
+
 def test_index_excludes_contents_and_references_and_sorts_by_page(tmp_path):
     pdf_path = tmp_path / "sample.pdf"
     doc = fitz.open()
@@ -345,6 +368,29 @@ def test_index_excludes_contents_and_references_and_sorts_by_page(tmp_path):
         record["index_version"] == INDEX_VERSION
         for record in json.loads(index_path.read_text(encoding="utf-8"))
     )
+
+
+def test_index_excludes_title_pages(tmp_path):
+    pdf_path = tmp_path / "title-page.pdf"
+    doc = fitz.open()
+    title_page = doc.new_page()
+    title_page.insert_text((72, 72), "RESEARCH REPORT SERIES")
+    title_page.insert_text((72, 100), "alpha title page")
+    main_page = doc.new_page()
+    main_page.insert_text((72, 72), "Introduction")
+    main_page.insert_text((72, 100), "alpha main content")
+    doc.save(pdf_path)
+    doc.close()
+
+    records = build_index(tmp_path, tmp_path / "index.json")
+
+    assert [record["page"] for record in records] == [2]
+    assert [
+        result["page"]
+        for result in find_keyword(
+            "alpha", tmp_path / "index.json", pdf_dir=tmp_path
+        )
+    ] == [2]
 
 
 def test_open_pdf_at_page_uses_browser_viewer(monkeypatch, tmp_path):

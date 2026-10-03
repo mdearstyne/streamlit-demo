@@ -54,7 +54,7 @@ Use the sort control to order results by matching pages, title, author, or
 publication year.
 
 The app creates or rebuilds the search index from the selected PDF folder.
-Pages identified as tables of contents are omitted, as are pages from a
+Recognized title pages and tables of contents are omitted, as are pages from a
 standalone References/Bibliography/Works Cited heading through the end of that
 document. The index is rebuilt automatically when its format or exclusion rules
 change.
