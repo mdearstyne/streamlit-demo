@@ -295,7 +295,7 @@ if query:
                             result["matched_terms"][0]
                             if result["matched_terms"]
                             else "",
-                            PDF_BASE_URL,
+                            public_pdf_base_url,
                             pdf_dir_path,
                         )
                     if pdf_url:
