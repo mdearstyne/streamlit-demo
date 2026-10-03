@@ -30,7 +30,48 @@ def test_highlight_snippet_marks_multiple_boolean_terms():
     )
 
     assert highlighted == (
-        "<mark>Survey</mark> <mark>response</mark>s include data."
+        "<mark>Survey</mark> responses include data."
+    )
+
+
+def test_search_matches_whole_words_and_punctuation_boundaries(tmp_path):
+    index_path = tmp_path / "index.json"
+    records = [
+        {
+            "document": f"doc-{page}.pdf",
+            "title": f"Document {page}",
+            "file_path": f"doc-{page}.pdf",
+            "index_version": INDEX_VERSION,
+            "page": page,
+            "text": text,
+        }
+        for page, text in enumerate(
+            (
+                "SNAP and OMB",
+                "SNAPCHAT and combining",
+                "OMB-related",
+            ),
+            start=1,
+        )
+    ]
+    index_path.write_text(json.dumps(records), encoding="utf-8")
+
+    snap_results = find_keyword("SNAP", index_path, pdf_dir=tmp_path)
+    omb_results = find_keyword("OMB", index_path, pdf_dir=tmp_path)
+
+    assert [result["page"] for result in snap_results] == [1]
+    assert [result["page"] for result in omb_results] == [1, 3]
+    assert [result["match_count"] for result in omb_results] == [1, 1]
+
+
+def test_snippet_highlighting_only_marks_whole_words():
+    highlighted = app._highlight_snippet_html(
+        "SNAP SNAPCHAT OMB combining OMB-related", ["SNAP", "OMB"]
+    )
+
+    assert highlighted == (
+        "<mark>SNAP</mark> SNAPCHAT <mark>OMB</mark> combining "
+        "<mark>OMB</mark>-related"
     )
 
 
@@ -393,24 +434,26 @@ def test_index_excludes_title_pages(tmp_path):
     ] == [2]
 
 
-def test_open_pdf_at_page_uses_browser_viewer(monkeypatch, tmp_path):
+def test_build_browser_pdf_url_opens_page_with_search_terms(tmp_path, monkeypatch):
     pdf_path = tmp_path / "sample.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF")
 
-    captured = {}
+    monkeypatch.setattr(
+        app,
+        "_get_or_create_pdf_server",
+        lambda pdf_dir: ("http://127.0.0.1:9999", pdf_dir),
+    )
 
-    def fake_open(url):
-        captured["url"] = url
-        return True
+    viewer_url = app.build_browser_pdf_url(
+        pdf_path, 12, "survey & response"
+    )
 
-    monkeypatch.setattr(app.webbrowser, "open_new_tab", fake_open)
-    monkeypatch.setattr(app, "_get_or_create_pdf_server", lambda pdf_dir: ("http://127.0.0.1:9999", pdf_dir))
-
-    assert app.open_pdf_at_page(str(pdf_path), 12, "survey & response") is True
-    assert captured["url"].startswith("https://mozilla.github.io/pdf.js/web/viewer.html?")
-    assert "page=12" in captured["url"]
-    assert "sample.pdf" in captured["url"]
-    assert parse_qs(urlsplit(captured["url"]).fragment) == {
+    parsed_url = urlsplit(viewer_url)
+    assert parsed_url.netloc == "mozilla.github.io"
+    assert parse_qs(parsed_url.query)["file"] == [
+        "http://127.0.0.1:9999/sample.pdf"
+    ]
+    assert parse_qs(parsed_url.fragment) == {
         "page": ["12"],
         "search": ["survey & response"],
         "phrase": ["true"],

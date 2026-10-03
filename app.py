@@ -1,13 +1,8 @@
 import functools
 import html
 import http.server
-import os
-import re
-import shutil
 import socketserver
-import subprocess
 import threading
-import webbrowser
 from pathlib import Path
 from urllib.parse import quote
 
@@ -17,6 +12,7 @@ from document_search import (
     DEFAULT_PDF_DIR,
     DEFAULT_INDEX_PATH,
     build_index,
+    compile_search_terms_pattern,
     find_keyword,
     QuerySyntaxError,
 )
@@ -29,9 +25,7 @@ def _highlight_snippet_html(snippet: str, search_terms: list[str]) -> str:
     if not search_terms:
         return html.escape(snippet)
 
-    pattern = re.compile(
-        "|".join(re.escape(term) for term in search_terms), re.IGNORECASE
-    )
+    pattern = compile_search_terms_pattern(search_terms)
     highlighted_parts = []
     cursor = 0
     for match in pattern.finditer(snippet):
@@ -139,94 +133,6 @@ def build_browser_pdf_url(
     )
 
 
-def detect_pdf_viewer():
-    local_app_data = Path(os.environ.get("LOCALAPPDATA", r"C:\Users\zbtay\AppData\Local"))
-    candidates = [
-        ("SumatraPDF", [
-            shutil.which("sumatrapdf.exe"),
-            str(Path(r"C:\Program Files\SumatraPDF\SumatraPDF.exe")),
-            str(Path(r"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe")),
-            str(local_app_data / "SumatraPDF" / "SumatraPDF.exe"),
-        ]),
-        ("Adobe Acrobat", [shutil.which("Acrobat.exe") or str(Path(r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe"))]),
-        ("Adobe Reader", [shutil.which("AcroRd32.exe") or str(Path(r"C:\Program Files\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe"))]),
-        ("Foxit Reader", [shutil.which("FoxitPDFReader.exe") or str(Path(r"C:\Program Files\Foxit Software\Foxit PDF Reader\FoxitPDFReader.exe"))]),
-    ]
-
-    for name, probable_paths in candidates:
-        for candidate in probable_paths:
-            if candidate and os.path.exists(candidate):
-                return name, candidate
-    return "None detected", None
-
-
-def open_pdf_at_page(pdf_path: str, page_number: int, search_term: str = ""):
-    pdf_path = str(pdf_path)
-    if not os.path.exists(pdf_path):
-        return False
-
-    browser_url = build_browser_pdf_url(pdf_path, page_number, search_term)
-    if browser_url:
-        try:
-            return bool(webbrowser.open_new_tab(browser_url))
-        except Exception:
-            pass
-
-    viewer_name, viewer_path = detect_pdf_viewer()
-    if viewer_path:
-        viewer_commands = {
-            "SumatraPDF": [
-                viewer_path,
-                "-new-window",
-                "-page",
-                str(page_number),
-                pdf_path,
-            ],
-            "Adobe Acrobat": [viewer_path, "/A", f"page={page_number}", pdf_path],
-            "Adobe Reader": [viewer_path, "/A", f"page={page_number}", pdf_path],
-            "Foxit Reader": [viewer_path, "/A", f"page={page_number}", pdf_path],
-        }
-        command = viewer_commands.get(viewer_name)
-        if command:
-            try:
-                subprocess.Popen(command, shell=False)
-                return True
-            except Exception:
-                pass
-
-    # Fallback for viewers that are available on PATH but not yet detected by the app.
-    candidates = [
-        ("Acrobat", "Acrobat.exe", ["/A", f"page={page_number}", pdf_path]),
-        ("Acrobat Reader", "AcroRd32.exe", ["/A", f"page={page_number}", pdf_path]),
-        (
-            "SumatraPDF",
-            "sumatrapdf.exe",
-            [
-                "-new-window",
-                "-page",
-                str(page_number),
-                pdf_path,
-            ],
-        ),
-        ("Foxit", "FoxitPDFReader.exe", ["/A", f"page={page_number}", pdf_path]),
-    ]
-
-    for _, exe_name, args in candidates:
-        exe_path = shutil.which(exe_name)
-        if exe_path:
-            try:
-                subprocess.Popen([exe_path] + args, shell=False)
-                return True
-            except Exception:
-                continue
-
-    try:
-        os.startfile(pdf_path)
-        return True
-    except Exception:
-        return False
-
-
 st.set_page_config(
     page_title="Pretested Question Resource", page_icon="📚", layout="wide"
 )
@@ -238,11 +144,6 @@ with st.sidebar:
     st.header("Settings")
     pdf_dir = st.text_input("PDF folder", value=str(DEFAULT_PDF_DIR))
     rebuild_index = st.button("Rebuild index")
-    viewer_name, viewer_path = detect_pdf_viewer()
-    if viewer_path:
-        st.success(f"Browser PDF viewing enabled. Local viewer detected: {viewer_name}.")
-    else:
-        st.success("Browser PDF viewing enabled. Local app will open PDFs in a browser tab.")
 
 pdf_dir_path = Path(pdf_dir)
 index_path = DEFAULT_INDEX_PATH
@@ -326,21 +227,19 @@ if query:
                         )
                     )
 
-                    if st.button(
-                        f"Open PDF at page {result['page']}",
-                        key=f"open_{document_idx}_{page_idx}",
-                    ):
-                        opened = open_pdf_at_page(
-                            document["path"],
-                            result["page"],
-                            result["matched_terms"][0]
-                            if result["matched_terms"]
-                            else "",
+                    pdf_url = build_browser_pdf_url(
+                        document["path"],
+                        result["page"],
+                        result["matched_terms"][0]
+                        if result["matched_terms"]
+                        else "",
+                    )
+                    if pdf_url:
+                        st.link_button(
+                            f"Open PDF at page {result['page']}",
+                            pdf_url,
                         )
-                        if not opened:
-                            st.error(
-                                f"Could not open the file automatically: "
-                                f"{document['path']}"
-                            )
+                    else:
+                        st.error(f"PDF not found: {document['path']}")
                     if page_idx < page_count - 1:
                         st.divider()

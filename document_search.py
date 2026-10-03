@@ -129,11 +129,23 @@ def _parse_query(query: str) -> tuple:
     return parsed
 
 
+def compile_search_terms_pattern(terms: list[str]) -> re.Pattern[str]:
+    alternatives = "|".join(
+        re.escape(term) for term in sorted(set(terms), key=len, reverse=True) if term
+    )
+    if not alternatives:
+        return re.compile(r"(?!)")
+    return re.compile(
+        rf"(?<!\w)(?:{alternatives})(?!\w)",
+        re.IGNORECASE,
+    )
+
+
 def _evaluate_query(expression: tuple, text: str) -> tuple[bool, list[str]]:
     kind = expression[0]
     if kind == "TERM":
         term = expression[1]
-        return term.casefold() in text.casefold(), [term]
+        return compile_search_terms_pattern([term]).search(text) is not None, [term]
     if kind == "NOT":
         matched, _ = _evaluate_query(expression[1], text)
         return not matched, []
@@ -366,19 +378,13 @@ def _extract_publication_year(pdf_doc) -> int | None:
 
 
 def _build_snippet(text: str, keywords: list[str], pad: int = 140) -> str:
-    lowered = text.casefold()
-    occurrences = [
-        (lowered.find(keyword.casefold()), keyword)
-        for keyword in keywords
-        if keyword
-    ]
-    occurrences = [(start, keyword) for start, keyword in occurrences if start >= 0]
-    if not occurrences:
+    occurrence = compile_search_terms_pattern(keywords).search(text)
+    if occurrence is None:
         return _clean_text(text[:pad * 2])
 
-    start, keyword = min(occurrences, key=lambda occurrence: occurrence[0])
+    start, end = occurrence.span()
     snippet_start = max(0, start - pad)
-    snippet_end = min(len(text), start + len(keyword) + pad)
+    snippet_end = min(len(text), end + pad)
     snippet = text[snippet_start:snippet_end]
     return _clean_text(snippet)
 
@@ -484,7 +490,11 @@ def find_keyword(
             title = title_cache[file_path]
 
         match_count = sum(
-            page_text.casefold().count(term.casefold()) for term in matched_terms
+            sum(
+                1
+                for _ in compile_search_terms_pattern([term]).finditer(page_text)
+            )
+            for term in matched_terms
         )
         snippet = _build_snippet(page_text, matched_terms)
         matches.append(

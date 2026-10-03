@@ -37,7 +37,8 @@ The checked-in Streamlit configuration enables reruns when Python source files
 are saved, so edits to the app and its imported modules appear automatically.
 
 Search supports explicit `AND`, `OR`, and `NOT` operators, parentheses, and
-quoted phrases. For example:
+quoted phrases. Individual terms match whole words rather than substrings in
+longer words, while punctuation acts as a word boundary. For example:
 
 ```text
 survey AND (response OR "data collection") AND NOT phone
@@ -60,6 +61,9 @@ document. The index is rebuilt automatically when its format or exclusion rules
 change.
 Local PDFs, `.env`, and the generated index are ignored by Git; do not commit
 large datasets or machine-specific paths.
+
+Matching PDFs open in the browser-based PDF.js viewer at the matching page, with
+the search term highlighted. The app does not launch a desktop PDF application.
 
 ## Server deployment
 
