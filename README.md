@@ -10,12 +10,21 @@ python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Edit `.env` and set `DOCUMENTS_DIR` to the folder containing your PDFs. Relative
-paths are resolved from the project root. `INDEX_PATH` is optional and defaults
-to `.local-data/document_index.json`.
+The demo PDFs are bundled in `static/pdfs/` and are used by default.
+`DOCUMENTS_DIR` can optionally point to another PDF folder; relative paths are
+resolved from the project root. `INDEX_PATH` is optional and defaults to
+`.local-data/document_index.json`. `PDF_ACCESS_MODE=local` serves PDFs from the
+machine running the app for browser viewing during local development. This
+works when opening Streamlit from that same machine.
 
-If you do not already have PDFs, download the Census working papers into the
-configured documents folder:
+For hosted deployment, set `PDF_ACCESS_MODE=public` in Streamlit Community
+Cloud's app secrets. With the bundled PDFs, the app automatically uses its
+`/app/static/pdfs/` URL. To use PDFs hosted elsewhere, also set `PDF_BASE_URL`
+to their public HTTP(S) base URL. That host must allow cross-origin requests
+from users' browsers so PDF.js can load the files.
+
+To download the full Census working-paper collection into a custom documents
+folder:
 
 ```powershell
 python download_census_working_papers.py
@@ -37,7 +46,8 @@ The checked-in Streamlit configuration enables reruns when Python source files
 are saved, so edits to the app and its imported modules appear automatically.
 
 Search supports explicit `AND`, `OR`, and `NOT` operators, parentheses, and
-quoted phrases. For example:
+quoted phrases. Individual search terms match whole words, not substrings
+inside longer words. For example:
 
 ```text
 survey AND (response OR "data collection") AND NOT phone
@@ -46,18 +56,25 @@ survey AND (response OR "data collection") AND NOT phone
 `NOT` is evaluated before `AND`, and `AND` before `OR`. Use double quotes when
 searching for a phrase.
 
+Search results prefer author names from a suggested citation, then use PDF
+metadata or first-page author lines as fallbacks. Publication year is taken
+from a first-page issue date or report number. Use the document sort control to
+order results by matching page count (the default), title, author, or
+publication year. All matching pages are displayed together.
+
 The app creates or rebuilds the search index from the selected PDF folder.
-Pages identified as tables of contents are omitted, as are pages from a
-standalone References/Bibliography/Works Cited heading through the end of that
-document. The index is rebuilt automatically when its format or exclusion rules
-change.
+Identified title pages, pages headed Abstract or Contents (including detected
+contents continuations), and pages from a standalone References/Bibliography/
+Works Cited heading through the end of that document are omitted from search.
+The index is rebuilt automatically when its format or exclusion rules change.
 Local PDFs, `.env`, and the generated index are ignored by Git; do not commit
 large datasets or machine-specific paths.
 
 ## Server deployment
 
-Set `DOCUMENTS_DIR` and optionally `INDEX_PATH` in the server environment to
-locations available to the app process. Mount or download the PDFs into
-`DOCUMENTS_DIR`, then build the index there or let the app create it. The
-current PDF-opening behavior is designed for local use and should be adapted
-to server-accessible PDF URLs before deploying the app publicly.
+Community Cloud serves bundled PDFs from `static/pdfs/` because static serving
+is enabled in `.streamlit/config.toml`. Set `PDF_ACCESS_MODE=public` in the
+app's secrets; bundled PDF links then use the deployed app's own URL. If using
+an alternate document folder, ensure the files are also reachable at the
+configured `PDF_BASE_URL`. Do not use local mode for a hosted deployment: its
+PDF links point to the server's loopback interface.

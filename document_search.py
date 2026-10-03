@@ -6,11 +6,30 @@ import fitz
 
 from data_config import DEFAULT_INDEX_PATH, DEFAULT_PDF_DIR
 
-INDEX_VERSION = 2
+INDEX_VERSION = 6
 _CONTENTS_HEADINGS = {"contents", "table of contents"}
+_TITLE_PAGE_MARKER = re.compile(
+    r"^\s*(?:RESEARCH REPORT SERIES\b|Prepared for\s*:|Prepared by\s*:|"
+    r"Title Page\s*$)",
+    re.IGNORECASE,
+)
+_ABSTRACT_HEADING = re.compile(
+    r"^(?:\d+(?:\.\d+)*\s+)?abstract(?:\s+continued)?\s*[:.\-–—]*$",
+    re.IGNORECASE,
+)
 _REFERENCE_HEADING = re.compile(
     r"^(?:(?:[a-z]-?)?\d+(?:\.\d+)*\s+)?"
     r"(?:references|bibliography|works cited)$",
+    re.IGNORECASE,
+)
+_AUTHOR_LINE = re.compile(
+    r"^[^\W\d_][\w.'’\-]*(?:\s+(?:[^\W\d_][\w.'’\-]*|de|van|von|del|la)){1,5}\s*\d*$",
+    re.UNICODE,
+)
+_AUTHOR_AFFILIATION = re.compile(
+    r"^(?:\d+\s*)?(?:RTI International|U\.?S\.? Census Bureau|"
+    r"Center for\b|Research and Methodology Directorate\b|"
+    r"Project Team\b|IOE\b|Report issued\b|Washington, D\.?C\.?)",
     re.IGNORECASE,
 )
 _CONTENTS_ENTRY = re.compile(
@@ -118,7 +137,8 @@ def _evaluate_query(expression: tuple, text: str) -> tuple[bool, list[str]]:
     kind = expression[0]
     if kind == "TERM":
         term = expression[1]
-        return term.casefold() in text.casefold(), [term]
+        matched = compile_search_terms_pattern([term]).search(text) is not None
+        return matched, [term]
     if kind == "NOT":
         matched, _ = _evaluate_query(expression[1], text)
         return not matched, []
@@ -136,6 +156,18 @@ def _evaluate_query(expression: tuple, text: str) -> tuple[bool, list[str]]:
     return False, []
 
 
+def compile_search_terms_pattern(terms: list[str]) -> re.Pattern[str]:
+    alternatives = "|".join(
+        re.escape(term) for term in sorted(set(terms), key=len, reverse=True) if term
+    )
+    if not alternatives:
+        return re.compile(r"(?!)")
+    return re.compile(
+        rf"(?<!\w)(?:{alternatives})(?!\w)",
+        re.IGNORECASE,
+    )
+
+
 def _clean_text(text: str) -> str:
     text = text.replace("\x00", "")
     text = re.sub(r"\s+", " ", text)
@@ -151,19 +183,36 @@ def _looks_like_contents_continuation(page_text: str) -> bool:
     lines = [line.strip() for line in page_text.splitlines() if line.strip()]
     contents_entries = sum(
         bool(_CONTENTS_ENTRY.match(line))
-        or bool(re.search(r"(?:\.{2,}|…{2,})\s*(?:[ivxlcdm]+|\d+)$", line, re.I))
+        or bool(
+            re.search(
+                r"(?:\.{2,}|…{2,})\s*(?:[ivxlcdm]+|\d+(?:-\d+)?)$",
+                line,
+                re.I,
+            )
+        )
         for line in lines
     )
-    return contents_entries >= 3
+    has_roman_page_label = bool(lines and re.fullmatch(r"[ivxlcdm]+", lines[0], re.I))
+    return contents_entries >= 3 or (
+        has_roman_page_label and contents_entries >= 2
+    )
 
 
 def _find_excluded_pages(pdf_doc) -> set[int]:
     page_texts = [page.get_text("text") for page in pdf_doc]
     contents_pages = set()
+    front_matter_pages = set()
     in_contents = False
 
     for page_number, text in enumerate(page_texts, start=1):
         lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if page_number <= 5 and any(
+            _TITLE_PAGE_MARKER.match(line) for line in lines[:20]
+        ):
+            front_matter_pages.add(page_number)
+        if any(_ABSTRACT_HEADING.fullmatch(line) for line in lines[:15]):
+            front_matter_pages.add(page_number)
+
         has_contents_heading = any(
             _is_contents_heading(line) for line in lines[:15]
         )
@@ -185,8 +234,8 @@ def _find_excluded_pages(pdf_doc) -> set[int]:
             break
 
     if reference_start is None:
-        return contents_pages
-    return contents_pages | set(
+        return contents_pages | front_matter_pages
+    return contents_pages | front_matter_pages | set(
         range(reference_start, len(page_texts) + 1)
     )
 
@@ -256,20 +305,104 @@ def _extract_title(pdf_doc, fallback: str) -> str:
     return fallback
 
 
+def _extract_author(pdf_doc, title: str) -> str:
+    if len(pdf_doc) == 0:
+        return ""
+
+    citation_author = _extract_citation_author(pdf_doc)
+    if citation_author:
+        return citation_author
+
+    metadata_author = _clean_text(pdf_doc.metadata.get("author") or "")
+    if metadata_author.casefold() not in {"", "unknown", "none", "n/a"}:
+        return metadata_author
+
+    lines = pdf_doc[0].get_text("text").splitlines()
+    page_text = " ".join(line.strip() for line in lines if line.strip())
+    title_start = page_text.casefold().find(title.casefold())
+    if title_start >= 0:
+        title_end = title_start + len(title)
+        line_offsets = []
+        cursor = 0
+        for line in lines:
+            cleaned_line = line.strip()
+            if not cleaned_line:
+                continue
+            line_offsets.append((cursor, cursor + len(cleaned_line), cleaned_line))
+            cursor += len(cleaned_line) + 1
+
+        author_lines = []
+        for start, end, line in line_offsets:
+            if end <= title_end:
+                continue
+            if start < title_end:
+                continue
+            if _AUTHOR_AFFILIATION.match(line):
+                break
+            if not _AUTHOR_LINE.fullmatch(line):
+                break
+            author_lines.append(re.sub(r"\s+\d+$", "", line))
+        if author_lines:
+            return "; ".join(author_lines)
+
+    return ""
+
+
+def _extract_citation_author(pdf_doc) -> str:
+    for page in pdf_doc:
+        text = page.get_text("text")
+        citation_start = re.search(r"\bSuggested Citation\s*:\s*", text, re.IGNORECASE)
+        if not citation_start:
+            continue
+
+        citation = text[citation_start.end() :]
+        publication_date = re.search(r"\(\s*(?:19|20)\d{2}\s*\)", citation)
+        if not publication_date:
+            continue
+
+        authors = _clean_text(citation[: publication_date.start()])
+        affiliation = re.search(
+            r"(?<=[^\W\d_]{2})\.\s+(?=[^\W\d_])", authors, re.UNICODE
+        )
+        if affiliation:
+            authors = authors[: affiliation.start()]
+        authors = authors.strip(" \t\r\n,;.")
+        if authors:
+            return authors
+    return ""
+
+
+def _extract_publication_year(pdf_doc) -> int | None:
+    if len(pdf_doc) == 0:
+        return None
+
+    first_page = pdf_doc[0].get_text("text")
+    issued_year = re.search(
+        r"\bReport issued\s*:\s*.*?\b((?:19|20)\d{2})\b",
+        first_page,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if issued_year:
+        return int(issued_year.group(1))
+
+    series_year = re.search(
+        r"\bSurvey Methodology\s*#\s*((?:19|20)\d{2})-\d+\b",
+        first_page,
+        re.IGNORECASE,
+    )
+    if series_year:
+        return int(series_year.group(1))
+    return None
+
+
 def _build_snippet(text: str, keywords: list[str], pad: int = 140) -> str:
-    lowered = text.casefold()
-    occurrences = [
-        (lowered.find(keyword.casefold()), keyword)
-        for keyword in keywords
-        if keyword
-    ]
-    occurrences = [(start, keyword) for start, keyword in occurrences if start >= 0]
-    if not occurrences:
+    occurrence = compile_search_terms_pattern(keywords).search(text)
+    if occurrence is None:
         return _clean_text(text[:pad * 2])
 
-    start, keyword = min(occurrences, key=lambda occurrence: occurrence[0])
+    start, end = occurrence.span()
     snippet_start = max(0, start - pad)
-    snippet_end = min(len(text), start + len(keyword) + pad)
+    snippet_end = min(len(text), end + pad)
     snippet = text[snippet_start:snippet_end]
     return _clean_text(snippet)
 
@@ -291,6 +424,8 @@ def build_index(pdf_dir: str | Path = DEFAULT_PDF_DIR, output_path: str | Path =
             continue
 
         title = _extract_title(pdf_doc, pdf_path.name)
+        author = _extract_author(pdf_doc, title)
+        publication_year = _extract_publication_year(pdf_doc)
         excluded_pages = _find_excluded_pages(pdf_doc)
         for page_number, page in enumerate(pdf_doc, start=1):
             if page_number in excluded_pages:
@@ -302,6 +437,8 @@ def build_index(pdf_dir: str | Path = DEFAULT_PDF_DIR, output_path: str | Path =
                 {
                     "document": pdf_path.name,
                     "title": title,
+                    "author": author,
+                    "year": publication_year,
                     "file_path": str(pdf_path.relative_to(pdf_dir)),
                     "index_version": INDEX_VERSION,
                     "page": page_number,
@@ -335,7 +472,6 @@ def load_index(
 def find_keyword(
     query: str,
     index_path: str | Path = DEFAULT_INDEX_PATH,
-    limit: int = 20,
     pdf_dir: str | Path = DEFAULT_PDF_DIR,
 ):
     if not query.strip():
@@ -372,13 +508,16 @@ def find_keyword(
             title = title_cache[file_path]
 
         match_count = sum(
-            page_text.casefold().count(term.casefold()) for term in matched_terms
+            sum(1 for _ in compile_search_terms_pattern([term]).finditer(page_text))
+            for term in matched_terms
         )
         snippet = _build_snippet(page_text, matched_terms)
         matches.append(
             {
                 "document": record["document"],
                 "title": title,
+                "author": record.get("author") or "",
+                "year": record.get("year"),
                 "page": record["page"],
                 "match_count": match_count,
                 "matched_terms": matched_terms,
@@ -390,4 +529,4 @@ def find_keyword(
     matches.sort(
         key=lambda item: (item["document"].casefold(), item["page"])
     )
-    return matches[:limit]
+    return matches
