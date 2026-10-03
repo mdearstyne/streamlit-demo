@@ -434,6 +434,48 @@ def test_index_excludes_title_pages(tmp_path):
     ] == [2]
 
 
+def test_index_excludes_wrapped_mult_page_contents_continuation(tmp_path):
+    pdf_path = tmp_path / "split-contents.pdf"
+    doc = fitz.open()
+
+    def add_page(lines):
+        page = doc.new_page()
+        for line_number, line in enumerate(lines):
+            page.insert_text((72, 72 + line_number * 18), line)
+
+    add_page(["Introduction", "alpha main text"])
+    add_page(
+        [
+            "Contents",
+            "1 Overview ........ 1",
+            "2 Survey results ........ 2",
+        ]
+    )
+    add_page(
+        [
+            "iii",
+            "3.",
+            "Recommendations ................................ 3",
+            "4.",
+            "Appendix ........................................ 4",
+            "alpha contents entry",
+        ]
+    )
+    add_page(["Methods", "alpha more main text"])
+    doc.save(pdf_path)
+    doc.close()
+
+    records = build_index(tmp_path, tmp_path / "index.json")
+
+    assert [record["page"] for record in records] == [1, 4]
+    assert [
+        result["page"]
+        for result in find_keyword(
+            "alpha", tmp_path / "index.json", pdf_dir=tmp_path
+        )
+    ] == [1, 4]
+
+
 def test_build_browser_pdf_url_opens_page_with_search_terms(tmp_path, monkeypatch):
     pdf_path = tmp_path / "sample.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF")

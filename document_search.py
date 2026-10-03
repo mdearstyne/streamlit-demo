@@ -6,7 +6,7 @@ import fitz
 
 from data_config import DEFAULT_INDEX_PATH, DEFAULT_PDF_DIR
 
-INDEX_VERSION = 4
+INDEX_VERSION = 5
 _CONTENTS_HEADINGS = {"contents", "table of contents"}
 _TITLE_PAGE_MARKER = re.compile(
     r"^\s*(?:RESEARCH REPORT SERIES\b|Prepared for\s*:|Prepared by\s*:|"
@@ -178,10 +178,19 @@ def _looks_like_contents_continuation(page_text: str) -> bool:
     lines = [line.strip() for line in page_text.splitlines() if line.strip()]
     contents_entries = sum(
         bool(_CONTENTS_ENTRY.match(line))
-        or bool(re.search(r"(?:\.{2,}|…{2,})\s*(?:[ivxlcdm]+|\d+)$", line, re.I))
+        or bool(
+            re.search(
+                r"(?:\.{2,}|…{2,})\s*(?:[ivxlcdm]+|\d+(?:-\d+)?)$",
+                line,
+                re.I,
+            )
+        )
         for line in lines
     )
-    return contents_entries >= 3
+    has_roman_page_label = bool(lines and re.fullmatch(r"[ivxlcdm]+", lines[0], re.I))
+    return contents_entries >= 3 or (
+        has_roman_page_label and contents_entries >= 2
+    )
 
 
 def _find_excluded_pages(pdf_doc) -> set[int]:
