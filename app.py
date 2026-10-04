@@ -70,10 +70,55 @@ def main():
         st.stop()
     if rebuild_index:
         st.success(f"Indexed documents from {pdf_dir_path}")
-    if not records:
-        st.info("No searchable text was found. Check that the folder contains PDFs with selectable text.")
-        st.stop()
+    search_tab, catalogue_tab = st.tabs(["Search", "Available documents"])
+    with search_tab:
+        if records:
+            render_search(records, pdf_dir_path)
+        else:
+            st.info("No searchable text was found. The available documents can still be opened "
+                    "from the catalogue. Scanned PDFs need OCR before they can be searched.")
+    with catalogue_tab:
+        render_catalogue(records, pdf_dir_path)
 
+
+def render_catalogue(records: list[dict], pdf_dir_path: Path) -> None:
+    """List the selected collection, including PDFs with no indexed pages."""
+    metadata = {}
+    page_counts = {}
+    for record in records:
+        filename = record["file_path"]
+        metadata.setdefault(filename, record)
+        page_counts[filename] = page_counts.get(filename, 0) + 1
+
+    rows = []
+    for path in pdf_dir_path.glob("*.pdf"):
+        if not path.is_file():
+            continue
+        document = metadata.get(path.name, {})
+        rows.append({
+            "Title": document.get("title") or path.name,
+            "Author": document.get("author") or "Not available",
+            "Year": str(document["year"]) if document.get("year") is not None else "Not available",
+            "File": path.name,
+            "Searchable pages": page_counts.get(path.name, 0),
+            "Open PDF": build_browser_pdf_url(path, 1, []),
+        })
+    rows.sort(key=lambda row: (row["Title"].casefold(), row["File"].casefold()))
+    st.write(f"{len(rows)} documents in this collection.")
+    st.caption("Search covers indexed pages in these documents. Title pages, contents, and "
+               "reference sections may be excluded. Documents with zero searchable pages "
+               "can be opened but will not appear in search results.")
+    st.dataframe(
+        rows,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Open PDF": st.column_config.LinkColumn("Open PDF", display_text="Open PDF"),
+        },
+    )
+
+
+def render_search(records: list[dict], pdf_dir_path: Path) -> None:
     query = st.text_input(
         "Search keyword or phrase",
         value="",
@@ -154,7 +199,6 @@ def main():
                         st.link_button(f"Open PDF at page {result['page']}", pdf_url)
                         if page_idx < page_count - 1:
                             st.divider()
-
 
 if __name__ == "__main__":
     main()

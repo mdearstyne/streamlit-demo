@@ -40,6 +40,14 @@ are saved, so edits to the app and its imported modules appear automatically.
 Only PDFs directly inside the selected folder are indexed; subfolders are not
 searched. Scanned PDFs need OCR first because the app searches selectable text.
 
+The **Search** tab contains the search interface. **Available documents** is a
+catalogue of the selected collection, with title, author, year, filename,
+searchable page count, and a link to open each PDF. Titles are sorted
+alphabetically. Metadata comes from the existing index; when a PDF has no indexed
+pages, its filename is shown as the title and missing metadata is labelled
+"Not available". These PDFs remain visible in the catalogue but cannot match
+searches. No additional PDF extraction is performed for the catalogue.
+
 Search supports explicit `AND`, `OR`, and `NOT` operators, parentheses, and
 quoted phrases. Individual terms match whole words rather than substrings in
 longer words, while punctuation acts as a word boundary. For example:
@@ -148,7 +156,8 @@ Private collections require access controls that also protect the static PDF
 URLs. Search exclusions and Git ignore rules do not restrict PDF access.
 
 An empty folder shows a setup message before indexing or searching. A collection
-with PDFs but no searchable pages shows a separate text-extraction message.
+with PDFs but no searchable pages shows a separate text-extraction message in
+the Search tab; its catalogue remains available.
 
 For a conventional server, copy the collection into `static/pdfs`, or mount a
 persistent data volume there. For example, a server collection stored at
