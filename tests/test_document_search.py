@@ -1,20 +1,31 @@
-import http.client
 import json
-from urllib.parse import parse_qs, urlsplit
 
 import fitz
 
-import app
+import ui_helpers
 from document_search import (
     INDEX_VERSION,
     QuerySyntaxError,
     build_index,
     find_keyword,
+    load_index,
 )
 
 
+def _write_test_index(index_path, pdf_dir, records):
+    for record in records:
+        record.setdefault("author", "")
+        record.setdefault("year", None)
+    index_path.write_text(json.dumps({
+        "index_version": INDEX_VERSION,
+        "pdf_dir": str(pdf_dir.resolve()),
+        "files": [],
+        "records": records,
+    }), encoding="utf-8")
+
+
 def test_highlight_snippet_escapes_text_and_marks_every_match():
-    highlighted = app._highlight_snippet_html(
+    highlighted = ui_helpers._highlight_snippet_html(
         "Survey <response> and SURVEY <response>", ["survey <response>"]
     )
 
@@ -25,7 +36,7 @@ def test_highlight_snippet_escapes_text_and_marks_every_match():
 
 
 def test_highlight_snippet_marks_multiple_boolean_terms():
-    highlighted = app._highlight_snippet_html(
+    highlighted = ui_helpers._highlight_snippet_html(
         "Survey responses include data.", ["survey", "response"]
     )
 
@@ -54,7 +65,7 @@ def test_search_matches_whole_words_and_punctuation_boundaries(tmp_path):
             start=1,
         )
     ]
-    index_path.write_text(json.dumps(records), encoding="utf-8")
+    _write_test_index(index_path, tmp_path, records)
 
     snap_results = find_keyword("SNAP", index_path, pdf_dir=tmp_path)
     omb_results = find_keyword("OMB", index_path, pdf_dir=tmp_path)
@@ -65,7 +76,7 @@ def test_search_matches_whole_words_and_punctuation_boundaries(tmp_path):
 
 
 def test_snippet_highlighting_only_marks_whole_words():
-    highlighted = app._highlight_snippet_html(
+    highlighted = ui_helpers._highlight_snippet_html(
         "SNAP SNAPCHAT OMB combining OMB-related", ["SNAP", "OMB"]
     )
 
@@ -299,23 +310,23 @@ def test_sort_documents_by_matching_pages_title_author_and_year():
 
     assert [
         document["title"]
-        for document in app._sort_documents(documents, "Most matching pages")
+        for document in ui_helpers._sort_documents(documents, "Most matching pages")
     ] == ["Beta", "Middle", "Zebra", "Alpha"]
     assert [
         document["title"]
-        for document in app._sort_documents(documents, "Title (A-Z)")
+        for document in ui_helpers._sort_documents(documents, "Title (A-Z)")
     ] == ["Alpha", "Beta", "Middle", "Zebra"]
     assert [
         document["title"]
-        for document in app._sort_documents(documents, "Author (A-Z)")
+        for document in ui_helpers._sort_documents(documents, "Author (A-Z)")
     ] == ["Middle", "Beta", "Zebra", "Alpha"]
     assert [
         document["title"]
-        for document in app._sort_documents(documents, "Year (newest first)")
+        for document in ui_helpers._sort_documents(documents, "Year (newest first)")
     ] == ["Beta", "Middle", "Zebra", "Alpha"]
     assert [
         document["title"]
-        for document in app._sort_documents(documents, "Year (oldest first)")
+        for document in ui_helpers._sort_documents(documents, "Year (oldest first)")
     ] == ["Zebra", "Beta", "Middle", "Alpha"]
 
 
@@ -340,7 +351,7 @@ def test_boolean_search_operators_precedence_and_phrases(tmp_path):
             start=1,
         )
     ]
-    index_path.write_text(json.dumps(records), encoding="utf-8")
+    _write_test_index(index_path, tmp_path, records)
 
     precedence_results = find_keyword(
         "alpha OR beta AND gamma", index_path, pdf_dir=tmp_path
@@ -376,7 +387,7 @@ def test_search_returns_all_matching_pages_without_a_limit(tmp_path):
         }
         for page_number in range(1, 26)
     ]
-    index_path.write_text(json.dumps(records), encoding="utf-8")
+    _write_test_index(index_path, tmp_path, records)
 
     results = find_keyword("alpha", index_path, pdf_dir=tmp_path)
 
@@ -419,7 +430,7 @@ def test_index_excludes_contents_and_references_and_sorts_by_page(tmp_path):
     index_path = tmp_path / "index.json"
     records = build_index(tmp_path, index_path)
     assert [record["page"] for record in records] == [1, 4]
-    assert all(record["index_version"] == INDEX_VERSION for record in records)
+    assert json.loads(index_path.read_text(encoding="utf-8"))["index_version"] == INDEX_VERSION
 
     results = find_keyword("alpha", index_path, pdf_dir=tmp_path)
     assert [result["page"] for result in results] == [1, 4]
@@ -441,10 +452,7 @@ def test_index_excludes_contents_and_references_and_sorts_by_page(tmp_path):
 
     refreshed_results = find_keyword("alpha", index_path, pdf_dir=tmp_path)
     assert [result["page"] for result in refreshed_results] == [1, 4]
-    assert all(
-        record["index_version"] == INDEX_VERSION
-        for record in json.loads(index_path.read_text(encoding="utf-8"))
-    )
+    assert json.loads(index_path.read_text(encoding="utf-8"))["index_version"] == INDEX_VERSION
 
 
 def test_index_excludes_title_pages(tmp_path):
@@ -510,44 +518,3 @@ def test_index_excludes_wrapped_mult_page_contents_continuation(tmp_path):
             "alpha", tmp_path / "index.json", pdf_dir=tmp_path
         )
     ] == [1, 4]
-
-
-def test_build_browser_pdf_url_opens_page_with_search_terms(tmp_path, monkeypatch):
-    pdf_path = tmp_path / "sample.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF")
-
-    monkeypatch.setattr(
-        app,
-        "_get_or_create_pdf_server",
-        lambda pdf_dir: ("http://127.0.0.1:9999", pdf_dir),
-    )
-
-    viewer_url = app.build_browser_pdf_url(
-        pdf_path, 12, "survey & response"
-    )
-
-    parsed_url = urlsplit(viewer_url)
-    assert parsed_url.netloc == "mozilla.github.io"
-    assert parse_qs(parsed_url.query)["file"] == [
-        "http://127.0.0.1:9999/sample.pdf"
-    ]
-    assert parse_qs(parsed_url.fragment) == {
-        "page": ["12"],
-        "search": ["survey & response"],
-        "phrase": ["true"],
-    }
-
-
-def test_pdf_server_allows_cross_origin_access(tmp_path):
-    pdf_path = tmp_path / "sample.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF")
-
-    server_url, _ = app._get_or_create_pdf_server(tmp_path)
-    host, port = server_url.split("://", 1)[1].split(":")
-    conn = http.client.HTTPConnection(host, int(port), timeout=5)
-    conn.request("GET", "/sample.pdf", headers={"Origin": "https://mozilla.github.io"})
-    response = conn.getresponse()
-    headers = response.getheaders()
-    assert response.status == 200
-    assert any(name.lower() == "access-control-allow-origin" and value == "*" for name, value in headers)
-    conn.close()

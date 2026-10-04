@@ -7,6 +7,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 load_dotenv(ROOT_DIR / ".env")
 
 LOCAL_DATA_DIR = ROOT_DIR / ".local-data"
+STATIC_DIR = ROOT_DIR / "static"
 
 
 def _configured_path(variable: str, default: Path) -> Path:
@@ -18,7 +19,7 @@ def _configured_path(variable: str, default: Path) -> Path:
 
 
 DEFAULT_PDF_DIR = _configured_path(
-    "DOCUMENTS_DIR", LOCAL_DATA_DIR / "pdfs"
+    "DOCUMENTS_DIR", STATIC_DIR / "pdfs"
 )
 DEFAULT_INDEX_PATH = _configured_path(
     "INDEX_PATH", LOCAL_DATA_DIR / "document_index.json"

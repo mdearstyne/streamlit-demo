@@ -1,4 +1,7 @@
 import json
+import os
+import tempfile
+from functools import lru_cache
 import re
 from pathlib import Path
 
@@ -6,7 +9,7 @@ import fitz
 
 from data_config import DEFAULT_INDEX_PATH, DEFAULT_PDF_DIR
 
-INDEX_VERSION = 7
+INDEX_VERSION = 8
 _CONTENTS_HEADINGS = {"contents", "table of contents"}
 _MONTH_YEAR = re.compile(
     r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
@@ -24,6 +27,7 @@ _REFERENCE_HEADING = re.compile(
     r"(?:references|bibliography|works cited)$",
     re.IGNORECASE,
 )
+_APPENDIX_HEADING = re.compile(r"appendi(?:x|ces)(?:\s.*|[:.].*)?", re.IGNORECASE)
 _AUTHOR_LINE = re.compile(
     r"^[^\W\d_][\w.'’\-]*(?:\s+(?:[^\W\d_][\w.'’\-]*|de|van|von|del|la)){1,5}\s*\d*$",
     re.UNICODE,
@@ -199,8 +203,7 @@ def _looks_like_contents_continuation(page_text: str) -> bool:
     )
 
 
-def _find_excluded_pages(pdf_doc) -> set[int]:
-    page_texts = [page.get_text("text") for page in pdf_doc]
+def _find_excluded_pages(page_texts: list[str]) -> set[int]:
     contents_pages = set()
     title_pages = set()
     in_contents = False
@@ -222,23 +225,23 @@ def _find_excluded_pages(pdf_doc) -> set[int]:
         else:
             in_contents = False
 
-    reference_start = None
+    excluded_pages = contents_pages | title_pages
+    in_references = False
     for page_number, text in enumerate(page_texts, start=1):
-        if page_number in contents_pages:
+        if page_number in excluded_pages:
             continue
         lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if any(_REFERENCE_HEADING.fullmatch(line) for line in lines[:20]):
-            reference_start = page_number
-            break
+        # Recognize headings near the top, not mentions buried in body text.
+        if any(_APPENDIX_HEADING.fullmatch(line) for line in lines[:5]):
+            in_references = False
+        elif any(_REFERENCE_HEADING.fullmatch(line) for line in lines[:20]):
+            in_references = True
+        if in_references:
+            excluded_pages.add(page_number)
+    return excluded_pages
 
-    if reference_start is None:
-        return contents_pages | title_pages
-    return contents_pages | title_pages | set(
-        range(reference_start, len(page_texts) + 1)
-    )
 
-
-def _extract_title(pdf_doc, fallback: str) -> str:
+def _extract_title(pdf_doc, fallback: str, page_texts: list[str]) -> str:
     metadata_title = _clean_text(pdf_doc.metadata.get("title") or "")
     if metadata_title:
         return metadata_title
@@ -277,7 +280,7 @@ def _extract_title(pdf_doc, fallback: str) -> str:
         if title_lines:
             return _clean_text(" ".join(title_lines))
 
-    lines = page.get_text("text").splitlines()
+    lines = page_texts[0].splitlines()
     series_index = next(
         (
             index
@@ -303,11 +306,11 @@ def _extract_title(pdf_doc, fallback: str) -> str:
     return fallback
 
 
-def _extract_author(pdf_doc, title: str) -> str:
+def _extract_author(pdf_doc, title: str, page_texts: list[str]) -> str:
     if len(pdf_doc) == 0:
         return ""
 
-    citation_author = _extract_citation_author(pdf_doc)
+    citation_author = _extract_citation_author(page_texts)
     if citation_author:
         return citation_author
 
@@ -326,7 +329,7 @@ def _extract_author(pdf_doc, title: str) -> str:
     if normalized_metadata_author not in generic_metadata_authors:
         return metadata_author
 
-    lines = pdf_doc[0].get_text("text").splitlines()
+    lines = page_texts[0].splitlines()
     page_text = " ".join(line.strip() for line in lines if line.strip())
     title_start = page_text.casefold().find(title.casefold())
     if title_start >= 0:
@@ -352,15 +355,15 @@ def _extract_author(pdf_doc, title: str) -> str:
         if author_lines:
             return "; ".join(author_lines)
 
-    prepared_by = _extract_prepared_by(pdf_doc)
+    prepared_by = _extract_prepared_by(page_texts)
     if prepared_by:
         return prepared_by
     return metadata_author
 
 
-def _extract_prepared_by(pdf_doc) -> str:
-    for page in pdf_doc:
-        lines = page.get_text("text").splitlines()
+def _extract_prepared_by(page_texts: list[str]) -> str:
+    for text in page_texts:
+        lines = text.splitlines()
         for index, line in enumerate(lines):
             match = re.match(r"^\s*Prepared\s+by\s*:?\s*(.*)$", line, re.I)
             if not match:
@@ -375,9 +378,8 @@ def _extract_prepared_by(pdf_doc) -> str:
     return ""
 
 
-def _extract_citation_author(pdf_doc) -> str:
-    for page in pdf_doc:
-        text = page.get_text("text")
+def _extract_citation_author(page_texts: list[str]) -> str:
+    for text in page_texts:
         citation_start = re.search(
             r"\bSuggested Citation\s*:\s*", text, re.IGNORECASE
         )
@@ -401,11 +403,11 @@ def _extract_citation_author(pdf_doc) -> str:
     return ""
 
 
-def _extract_publication_year(pdf_doc) -> int | None:
-    if len(pdf_doc) == 0:
+def _extract_publication_year(page_texts: list[str]) -> int | None:
+    if not page_texts:
         return None
 
-    first_page = pdf_doc[0].get_text("text")
+    first_page = page_texts[0]
     issued_year = re.search(
         r"\bReport issued\s*:\s*.*?\b((?:19|20)\d{2})\b",
         first_page,
@@ -440,66 +442,136 @@ def _build_snippet(text: str, keywords: list[str], pad: int = 140) -> str:
     return _clean_text(snippet)
 
 
-def build_index(pdf_dir: str | Path = DEFAULT_PDF_DIR, output_path: str | Path = DEFAULT_INDEX_PATH):
-    pdf_dir = Path(pdf_dir).expanduser().resolve()
-    output_path = Path(output_path)
+def _pdf_manifest(pdf_dir: Path) -> list[dict]:
+    """A cheap snapshot to detect added, edited, and deleted PDFs."""
+    if not pdf_dir.is_dir():
+        raise NotADirectoryError(f"PDF folder does not exist or is not a directory: {pdf_dir}")
+    files = []
+    for path in sorted(pdf_dir.glob("*.pdf")):
+        if path.is_file():
+            stat = path.stat()
+            files.append({
+                "name": path.name,
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            })
+    return files
+
+
+def _write_index(output_path: Path, payload: dict) -> None:
+    """Replace the index only after the complete JSON has been written."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=output_path.parent,
+            prefix=output_path.name + ".", suffix=".tmp", delete=False,
+        ) as fh:
+            temporary_path = Path(fh.name)
+            json.dump(payload, fh, ensure_ascii=False)
+            fh.flush()
+            os.fsync(fh.fileno())
+        temporary_path.replace(output_path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    _read_index.cache_clear()
 
-    if not pdf_dir.exists():
-        raise FileNotFoundError(f"PDF directory does not exist: {pdf_dir}")
 
+def build_index(
+    pdf_dir: str | Path = DEFAULT_PDF_DIR,
+    output_path: str | Path = DEFAULT_INDEX_PATH,
+) -> list[dict]:
+    pdf_dir = Path(pdf_dir).expanduser().resolve()
+    output_path = Path(output_path).expanduser().resolve()
+    files = _pdf_manifest(pdf_dir)
     records = []
-    for pdf_path in sorted(pdf_dir.glob("*.pdf")):
+    for file in files:
+        pdf_path = pdf_dir / file["name"]
+        # A failed extraction must not publish a partial index as up to date.
         try:
-            pdf_doc = fitz.open(str(pdf_path))
-        except Exception as exc:  # pragma: no cover - defensive guard
-            print(f"Skipping unreadable PDF: {pdf_path} ({exc})")
-            continue
-
-        title = _extract_title(pdf_doc, pdf_path.name)
-        author = _extract_author(pdf_doc, title)
-        publication_year = _extract_publication_year(pdf_doc)
-        excluded_pages = _find_excluded_pages(pdf_doc)
-        for page_number, page in enumerate(pdf_doc, start=1):
-            if page_number in excluded_pages:
-                continue
-            page_text = _clean_text(page.get_text("text"))
-            if not page_text:
-                continue
-            records.append(
-                {
-                    "document": pdf_path.name,
-                    "title": title,
-                    "author": author,
-                    "year": publication_year,
-                    "file_path": str(pdf_path.relative_to(pdf_dir)),
-                    "index_version": INDEX_VERSION,
-                    "page": page_number,
-                    "text": page_text,
-                }
-            )
-
-        pdf_doc.close()
-
-    output_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+            with fitz.open(str(pdf_path)) as pdf_doc:
+                page_texts = [page.get_text("text") for page in pdf_doc]
+                title = _extract_title(pdf_doc, pdf_path.name, page_texts)
+                author = _extract_author(pdf_doc, title, page_texts)
+                year = _extract_publication_year(page_texts)
+                excluded_pages = _find_excluded_pages(page_texts)
+                for page_number, text in enumerate(page_texts, start=1):
+                    page_text = _clean_text(text)
+                    if page_number in excluded_pages or not page_text:
+                        continue
+                    records.append({
+                        "document": pdf_path.name,
+                        "title": title,
+                        "author": author,
+                        "year": year,
+                        "file_path": pdf_path.name,
+                        "page": page_number,
+                        "text": page_text,
+                    })
+        except Exception as exc:
+            raise ValueError(f"Could not index {pdf_path.name}: {exc}") from exc
+    if files != _pdf_manifest(pdf_dir):
+        raise ValueError("PDF files changed during indexing. Please try again.")
+    _write_index(output_path, {
+        "index_version": INDEX_VERSION,
+        "pdf_dir": str(pdf_dir),
+        "files": files,
+        "records": records,
+    })
     return records
+
+
+@lru_cache(maxsize=2)
+def _read_index(index_path: str, mtime_ns: int, size: int) -> dict:
+    # File metadata is part of the cache key; rebuilding invalidates old data.
+    with Path(index_path).open("r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _valid_records(records) -> bool:
+    if not isinstance(records, list):
+        return False
+    for record in records:
+        if not isinstance(record, dict):
+            return False
+        if any(
+            not isinstance(record.get(key), str)
+            for key in ("document", "title", "author", "file_path", "text")
+        ):
+            return False
+        path = Path(record["file_path"])
+        if path.name != record["file_path"] or path.is_absolute():
+            return False
+        if type(record.get("page")) is not int or record["page"] < 1:
+            return False
+        if record.get("year") is not None and type(record["year"]) is not int:
+            return False
+    return True
 
 
 def load_index(
     index_path: str | Path = DEFAULT_INDEX_PATH,
     pdf_dir: str | Path = DEFAULT_PDF_DIR,
-):
-    index_path = Path(index_path)
-    if not index_path.exists():
-        build_index(pdf_dir, index_path)
-
-    with index_path.open("r", encoding="utf-8") as fh:
-        payload = json.load(fh)
-    if payload and any(
-        record.get("index_version") != INDEX_VERSION for record in payload
+) -> list[dict]:
+    index_path = Path(index_path).expanduser().resolve()
+    pdf_dir = Path(pdf_dir).expanduser().resolve()
+    files = _pdf_manifest(pdf_dir)
+    try:
+        stat = index_path.stat()
+        payload = _read_index(str(index_path), stat.st_mtime_ns, stat.st_size)
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+        payload = None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("index_version") != INDEX_VERSION
+        or payload.get("pdf_dir") != str(pdf_dir)
+        or payload.get("files") != files
+        or not _valid_records(payload.get("records"))
     ):
-        payload = build_index(pdf_dir, index_path)
-    return payload
+        # Old list indexes and damaged indexes use the same rebuild path.
+        return build_index(pdf_dir, index_path)
+    return payload["records"]
 
 
 def find_keyword(
@@ -509,37 +581,22 @@ def find_keyword(
 ):
     if not query.strip():
         return []
-    expression = _parse_query(query)
+    return search_records(query, load_index(index_path, pdf_dir), pdf_dir)
 
+
+def search_records(query: str, records: list[dict], pdf_dir: str | Path) -> list[dict]:
+    if not query.strip():
+        return []
+    expression = _parse_query(query)
     matches = []
-    title_cache = {}
-    for record in load_index(index_path, pdf_dir):
+    for record in records:
         page_text = record["text"]
         matched, matched_terms = _evaluate_query(expression, page_text)
         if not matched:
             continue
 
         matched_terms = list(dict.fromkeys(matched_terms))
-        record_path = Path(record["file_path"])
-        pdf_path = (
-            record_path
-            if record_path.is_absolute()
-            else Path(pdf_dir) / record_path
-        )
-        pdf_path = pdf_path.resolve()
-        title = record.get("title")
-        if not title:
-            file_path = str(pdf_path)
-            if file_path not in title_cache:
-                if pdf_path.exists():
-                    with fitz.open(str(pdf_path)) as pdf_doc:
-                        title_cache[file_path] = _extract_title(
-                            pdf_doc, record["document"]
-                        )
-                else:
-                    title_cache[file_path] = record["document"]
-            title = title_cache[file_path]
-
+        pdf_path = (Path(pdf_dir) / record["file_path"]).resolve()
         match_count = sum(
             sum(
                 1
@@ -551,7 +608,7 @@ def find_keyword(
         matches.append(
             {
                 "document": record["document"],
-                "title": title,
+                "title": record["title"],
                 "author": record.get("author") or "",
                 "year": record.get("year"),
                 "page": record["page"],

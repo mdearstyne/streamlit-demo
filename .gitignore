@@ -5,3 +5,4 @@ __pycache__/
 .local-data/
 .env
 /document_index.json
+/static/pdfs/
