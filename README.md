@@ -193,12 +193,145 @@ Find behavior. You can disconnect your local machine from the internet and
 repeat against the locally running app. Browser support for PDF page/search
 fragments varies; visual page navigation needs a browser check.
 
+## Ask the reports
+
+This optional tab answers natural-language questions using OpenAI and the same
+indexed pages as ordinary search. It requires internet access and separately
+billed API usage. Ordinary search and PDF viewing remain independent of OpenAI.
+
+1. Add `OPENAI_API_KEY` to your ignored local `.env`, or as a root-level string
+   in Community Cloud Secrets. Restart Streamlit after changing configuration.
+2. In a trusted environment, enable `ENABLE_ADMIN_CONTROLS=true` and open
+   **Ask the reports**. Review the estimate and click **Prepare report questions**.
+   Preparation sends indexed text to OpenAI to create embeddings.
+3. Choose **Quick answer** or **Thorough review**, enter a question, and click
+   **Ask the reports**. Opening tabs and ordinary reruns do not make paid requests.
+   Disable administrator controls before exposing the app publicly.
+
+### Retrieval and citations
+
+Answers use `gpt-4.1-mini-2025-04-14`; retrieval uses `text-embedding-3-small`
+with 256 dimensions. Requests use the existing `requests` dependency, with no
+additional packages or vector database service. Indexed pages are split into
+overlapping 1,500-character passages retaining filename and physical page number.
+Passages may begin or end mid-sentence. Unchanged embeddings are reused. Added
+or edited text requires administrator preparation; deleted passages are not used.
+Normal index exclusions also apply to AI retrieval.
+
+Quick answer combines semantic and keyword rankings to select ten passages.
+Thorough review generates up to three related queries, considers up to two
+passages per report (64 passages maximum), extracts evidence in batches, and
+synthesizes findings using the original passages. Coverage is displayed. This is
+broader retrieval, not an exhaustive reading of every report; large collections
+can exceed the coverage cap.
+
+The application validates source IDs and builds PDF page links itself. Model
+text is escaped before display. Missing or unknown citations prevent an answer
+from being displayed. This validates source identity, not whether the passage
+supports the claim: users should check the evidence. Reports are treated as
+untrusted evidence rather than instructions, but model mistakes and prompt
+injection remain possible. No external web search is used. The API key stays
+server-side and is not stored in the embedding cache or sent to the browser.
+
+### Spending and persistent storage
+
+Limits are $0.10 per quick answer, $0.50 per thorough review, and $2 per UTC day
+across users sharing the ledger. Query embeddings, related-query generation,
+intermediate extraction, and synthesis all count toward answer budgets.
+Embedding preparation has a separate cumulative $1 budget, including subsequent
+updates. An administrator must deliberately revise that limit for further
+preparation once it is exhausted.
+
+Before each paid call, SQLite reserves a conservative maximum cost using UTF-8
+bytes as an input-token bound, a framing allowance, and capped output tokens.
+Successful responses update the ledger using reported token usage. Standard
+prices are $0.40/$1.60 per million answer input/output tokens and $0.02 per million
+embedding tokens. Review pricing constants if model rates change. These are
+application controls based on those rates, not a provider-enforced billing cap.
+There are no automatic paid retries. Failed or interrupted calls retain their
+reservation because billing is uncertain. Partial preparation saves completed
+batches so they can be reused.
+
+Embedding storage and spending storage are separate:
+
+- `AI_EMBEDDINGS_PATH` defaults to `.local-data/embeddings.sqlite3`. Reading
+  embeddings uses a read-only connection; preparation requires a writable file.
+- `AI_SPENDING_PATH` defaults to `.local-data/usage.sqlite3`. This ledger must be
+  writable and persistent. All answer and preparation spending is recorded here.
+
+Both local defaults are outside the public static folder and ignored by Git.
+Session answers persist across reruns and are hidden if the collection changes.
+Transactions serialize reservations across sessions/processes sharing the ledger.
+
+### Migrating the previous combined database
+
+Stop the app before migration, then run:
+
+```powershell
+python migrate_ai_storage.py
+```
+
+This copies embeddings and all spending rows, including their IDs and pending
+reservations, into the two configured files. The original
+`.local-data/report_answers.sqlite3` remains unchanged as a backup. Existing
+migration destinations are never overwritten. `--source` selects another legacy
+file; the retired `AI_DATA_PATH` setting is also recognized as a migration source.
+Use `AI_EMBEDDINGS_PATH` and `AI_SPENDING_PATH` for the running app now. Restart
+Streamlit before further paid requests. If a legacy database exists but the new
+ledger is missing, paid requests are blocked until migration, preserving limits.
+
+### Exporting demo embeddings for Git
+
+Keep demo PDFs in `static/demo-pdfs`, then run:
+
+```powershell
+python export_demo_embeddings.py
+```
+
+This builds a separate demo search index under `.local-data`, identifies the demo
+passages, and exports only their cached vectors to `demo-data/embeddings.sqlite3`.
+It does not change your local document setting or full search index, send API
+requests, or copy spending history. Missing vectors cause an error without
+publishing an incomplete export. Prepare those passages through the app first.
+An existing embeddings-only export is replaced atomically when regenerated.
+The source cache and databases containing spending records cannot be overwritten.
+
+Commit `demo-data/embeddings.sqlite3` with the demo PDFs and code. Neither API
+keys nor spending records are included. Embeddings are derived from document
+content, so publish them only for a collection you intend to make public. The
+hashing, embedding model, dimensions, and passage-splitting rules must match the
+app version; changed demo content requires an updated export.
+
+For Community Cloud, configure root-level Secrets:
+
+```toml
+DOCUMENTS_DIR = "static/demo-pdfs"
+AI_EMBEDDINGS_PATH = "demo-data/embeddings.sqlite3"
+AI_SPENDING_PATH = ".local-data/usage.sqlite3"
+ENABLE_ADMIN_CONTROLS = "false"
+# Add OPENAI_API_KEY securely in Secrets, never in the repository.
+```
+
+Normal answering only reads the committed embedding database. For server
+hosting, place the spending ledger on persistent writable storage. Community
+Cloud runtime resets can erase its ledger, resetting spending controls. Separate
+replicas need a shared spending service before limits can be considered
+deployment-wide. Keep AI access restricted until those requirements are settled.
+
+Sources: [answer model and pricing](https://developers.openai.com/api/docs/models/gpt-4.1-mini),
+[embedding model and pricing](https://developers.openai.com/api/docs/models/text-embedding-3-small),
+and [structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
+
 ## Code and checks
 
 - `app.py`: Streamlit UI inside `main()` and cached search results.
 - `document_search.py`: query parsing, PDF extraction, index validation, and search.
 - `ui_helpers.py`: snippet highlighting and document sorting without UI execution.
 - `pdf_viewer.py`: browser PDF links and page/search parameters.
+- `report_answers.py`: passage retrieval, OpenAI requests, cache, and spending ledger.
+- `answer_ui.py`: report question tab and validated source links.
+- `migrate_ai_storage.py`: one-time split of the legacy database, preserving spending history.
+- `export_demo_embeddings.py`: export only the selected demo passage embeddings.
 - `data_config.py`: environment settings and project-relative paths.
 - `download_census_working_papers.py`: optional Census PDF downloader.
 

@@ -7,6 +7,7 @@ from data_config import (
 )
 from document_search import QuerySyntaxError, build_index, load_index, search_records
 from pdf_viewer import build_browser_pdf_url
+from answer_ui import render_answers
 from ui_helpers import _highlight_snippet_html, _sort_documents
 
 
@@ -70,7 +71,7 @@ def main():
         st.stop()
     if rebuild_index:
         st.success(f"Indexed documents from {pdf_dir_path}")
-    search_tab, catalogue_tab = st.tabs(["Search", "Available documents"])
+    search_tab, catalogue_tab, answers_tab = st.tabs(["Search", "Available documents", "Ask the reports"])
     with search_tab:
         if records:
             render_search(records, pdf_dir_path)
@@ -79,6 +80,8 @@ def main():
                     "from the catalogue. Scanned PDFs need OCR before they can be searched.")
     with catalogue_tab:
         render_catalogue(records, pdf_dir_path)
+    with answers_tab:
+        render_answers(records, pdf_dir_path)
 
 
 def render_catalogue(records: list[dict], pdf_dir_path: Path) -> None:
