@@ -5,4 +5,5 @@ __pycache__/
 .local-data/
 .env
 /document_index.json
-/static/pdfs/
+/static/pdfs/*
+!/static/pdfs/.gitkeep
