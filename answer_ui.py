@@ -36,7 +36,7 @@ def render_answers(records: list[dict], pdf_dir_path: Path) -> None:
         if missing:
             st.info("This collection needs preparation before questions can be answered.")
             if ENABLE_ADMIN_CONTROLS:
-                st.write(f"{len(missing):,} new passages. Conservative cost estimate: ${estimate:.4f}. Preparation limit: $1.")
+                st.write(f"{len(missing):,} new passages. Conservative cost estimate: USD {estimate:.4f}. Preparation limit: USD 1.")
                 st.caption("Preparation sends indexed text to OpenAI. Existing embeddings are reused.")
                 if st.button("Prepare report questions", disabled=estimate > 1):
                     with st.spinner("Preparing report passages..."):
@@ -46,14 +46,15 @@ def render_answers(records: list[dict], pdf_dir_path: Path) -> None:
                 st.caption("The administrator needs to prepare this collection.")
             return
         if ENABLE_ADMIN_CONTROLS:
-            st.caption(f"Recorded answer spending today (UTC): ${daily_spend():.4f} of $2.")
+            st.caption(f"Recorded answer spending today (UTC): USD {daily_spend():.4f} of USD 2.")
         with st.form("report_question_form"):
             question = st.text_area("Your question", max_chars=2000,
                                     placeholder="What has previous testing found related to SNAP benefits?")
             mode = st.radio("Answer mode", ["Quick answer", "Thorough review"], horizontal=True)
-            st.caption("Quick answer retrieves a small set of passages (up to $0.10). Thorough review "
-                       "searches related questions and gathers evidence across reports (up to $0.50). "
-                       "Neither guarantees exhaustive coverage. Questions and selected passages are sent to OpenAI.")
+            st.caption("Quick answer retrieves a small set of passages (up to USD 0.10 per question).")
+            st.caption("Thorough review searches related questions and gathers evidence across reports "
+                       "(up to USD 0.50 per question).")
+            st.caption("Neither guarantees exhaustive coverage. Questions and selected passages are sent to OpenAI.")
             submitted = st.form_submit_button("Ask the reports")
         if submitted:
             st.session_state.pop("report_answer", None)
@@ -72,7 +73,7 @@ def render_answers(records: list[dict], pdf_dir_path: Path) -> None:
 def show_answer(result: dict, folder: Path, total_reports: int) -> None:
     sources = {s["id"]: s for s in result["sources"]}
     st.write(result["question"])
-    st.caption(f"{result['mode']} | Recorded API cost: ${result['cost']:.4f}")
+    st.caption(f"{result['mode']} | Recorded API cost: USD {result['cost']:.4f}")
     if not result["answer"]["paragraphs"]:
         st.info("The retrieved passages did not provide enough evidence to answer this question.")
     for paragraph in result["answer"]["paragraphs"]:
