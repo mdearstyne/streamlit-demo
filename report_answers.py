@@ -240,6 +240,8 @@ def validate_answer(answer: dict, sources: list[dict]) -> dict:
 def answer_question(question: str, passages: list[dict], thorough: bool) -> dict:
     if not question.strip() or len(question) > 2000:
         raise AnswerError("Enter a question of at most 2,000 characters.")
+    if not passages:
+        raise AnswerError("No searchable passages are available for this question.")
     vectors = cached_vectors()
     if any(p["key"] not in vectors for p in passages):
         raise AnswerError("The collection changed. Prepare the missing embeddings before asking a question.")
