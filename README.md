@@ -69,6 +69,7 @@ folder changes, a PDF is added/deleted, a file's size or modification time chang
 or the index is missing, damaged, or uses an older format. File changes alone do
 not refresh an idle browser; interact with the app or use **Rebuild index**.
 The manual button also handles edits that preserve both file size and timestamp.
+It is available only when `ENABLE_ADMIN_CONTROLS=true`.
 
 Recognized title pages and tables of contents are omitted. A standalone
 References/Bibliography/Works Cited heading starts an excluded section;
@@ -122,9 +123,32 @@ streamlit-demo/
 
 `DOCUMENTS_DIR=static/pdfs` selects the collection. `INDEX_PATH` defaults to
 `.local-data/document_index.json` and must be writable. The sidebar can select
-another collection under `static`. Restart the app after changing `.env` or
+another collection under `static` when `ENABLE_ADMIN_CONTROLS=true`. Restart the app after changing `.env` or
 Streamlit configuration. The checked-in `.streamlit/config.toml` enables static
 file serving; start Streamlit from the project root so it reads that setting.
+
+### Public deployment controls
+
+`ENABLE_ADMIN_CONTROLS` defaults to `false`. The local `.env.example` enables
+it for development, exposing the folder setting and manual rebuild button.
+On a public deployment, leave it unset or set it to the string `"false"`.
+Visitors then use the configured collection and cannot request manual rebuilds
+or change the folder. Index freshness checks and automatic rebuilds still run.
+
+For Community Cloud, use root-level Secrets entries such as:
+
+```toml
+DOCUMENTS_DIR = "static/pdfs"
+ENABLE_ADMIN_CONTROLS = "false"
+```
+
+This setting controls the UI for the entire app; it does not authenticate an
+administrator. Enable it only in an environment where all visitors are trusted.
+Private collections require access controls that also protect the static PDF
+URLs. Search exclusions and Git ignore rules do not restrict PDF access.
+
+An empty folder shows a setup message before indexing or searching. A collection
+with PDFs but no searchable pages shows a separate text-extraction message.
 
 For a conventional server, copy the collection into `static/pdfs`, or mount a
 persistent data volume there. For example, a server collection stored at

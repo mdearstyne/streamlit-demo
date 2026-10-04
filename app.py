@@ -2,7 +2,9 @@ from pathlib import Path
 
 import streamlit as st
 
-from data_config import DEFAULT_INDEX_PATH, DEFAULT_PDF_DIR, ROOT_DIR, STATIC_DIR
+from data_config import (
+    DEFAULT_INDEX_PATH, DEFAULT_PDF_DIR, ENABLE_ADMIN_CONTROLS, ROOT_DIR, STATIC_DIR,
+)
 from document_search import QuerySyntaxError, build_index, load_index, search_records
 from pdf_viewer import build_browser_pdf_url
 from ui_helpers import _highlight_snippet_html, _sort_documents
@@ -21,10 +23,13 @@ def main():
     st.title("Pretested Question Resource")
     st.caption("Search PDF working papers and open matching pages in your browser.")
 
-    with st.sidebar:
-        st.header("Settings")
-        pdf_dir = st.text_input("PDF folder", value=str(DEFAULT_PDF_DIR))
-        rebuild_index = st.button("Rebuild index")
+    pdf_dir = str(DEFAULT_PDF_DIR)
+    rebuild_index = False
+    if ENABLE_ADMIN_CONTROLS:
+        with st.sidebar:
+            st.header("Settings")
+            pdf_dir = st.text_input("PDF folder", value=pdf_dir)
+            rebuild_index = st.button("Rebuild index")
 
     pdf_dir_path = Path(pdf_dir).expanduser()
     if not pdf_dir_path.is_absolute():
@@ -33,7 +38,10 @@ def main():
     index_path = DEFAULT_INDEX_PATH
 
     if not pdf_dir_path.is_dir():
-        st.error(f"The PDF folder does not exist or is not a directory: {pdf_dir_path}")
+        if ENABLE_ADMIN_CONTROLS:
+            st.error(f"The PDF folder does not exist or is not a directory: {pdf_dir_path}")
+        else:
+            st.error("The document collection is unavailable. Please contact the app administrator.")
         st.stop()
 
     if not pdf_dir_path.is_relative_to(STATIC_DIR.resolve()):
@@ -42,17 +50,29 @@ def main():
         st.stop()
 
     try:
+        if not any(path.is_file() for path in pdf_dir_path.glob("*.pdf")):
+            st.info("No PDFs available in this collection.")
+            if ENABLE_ADMIN_CONTROLS:
+                st.caption("Add PDFs directly to the configured folder, then refresh the app. "
+                           "Files in subfolders are not searched.")
+            else:
+                st.caption("The app administrator needs to supply the document collection.")
+            st.stop()
         with st.spinner("Checking and updating the PDF index..."):
             if rebuild_index:
                 build_index(pdf_dir_path, index_path)
             records = load_index(index_path, pdf_dir_path)
     except (OSError, ValueError) as exc:
-        st.error(f"Could not load the PDF collection: {exc}")
+        if ENABLE_ADMIN_CONTROLS:
+            st.error(f"Could not load the PDF collection: {exc}")
+        else:
+            st.error("Could not load the document collection. Please contact the app administrator.")
         st.stop()
     if rebuild_index:
         st.success(f"Indexed documents from {pdf_dir_path}")
     if not records:
         st.info("No searchable text was found. Check that the folder contains PDFs with selectable text.")
+        st.stop()
 
     query = st.text_input(
         "Search keyword or phrase",
@@ -101,6 +121,9 @@ def main():
                 f"Found {len(results)} matching pages across "
                 f"{len(documents)} documents."
             )
+            st.caption("PDF links request the matching page where supported; some mobile viewers "
+                       "open at the beginning. Use Find in your PDF viewer to highlight terms. "
+                       "Page numbers refer to PDF pages, not printed page labels.")
             sorted_documents = _sort_documents(list(documents.values()), sort_by)
             for document in sorted_documents:
                 page_count = len(document["pages"])

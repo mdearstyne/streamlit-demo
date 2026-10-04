@@ -8,6 +8,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 LOCAL_DATA_DIR = ROOT_DIR / ".local-data"
 STATIC_DIR = ROOT_DIR / "static"
+ENABLE_ADMIN_CONTROLS = os.environ.get("ENABLE_ADMIN_CONTROLS", "false").lower() == "true"
 
 
 def _configured_path(variable: str, default: Path) -> Path:
